@@ -252,3 +252,187 @@ async def test_acts_in_heat_cool_mode(hass: HomeAssistant) -> None:
     # offset = (24 - 22) * 1.0 = 2.0; setpoint = 22.0 - 2.0 = 20.0
     assert len(calls) == 1
     assert calls[0].data["temperature"] == 20.0
+
+
+@pytest.mark.asyncio
+async def test_triggers_correctly_when_switching_from_unsupported_to_supported_mode(
+    hass: HomeAssistant,
+) -> None:
+    """
+    Reproduces the reported issue: AC is in fan mode (unsupported), 
+    setpoint changes, then mode switches to cool (supported).
+    
+    Expected: Follow Me should fire and adjust the setpoint.
+    """
+    calls = async_mock_service(hass, "climate", "set_temperature")
+
+    await setup_blueprint(hass)
+
+    # Step 1: AC is in fan mode (not supported)
+    hass.states.async_set(
+        "climate.test_ac",
+        "fan_only",
+        {
+            "hvac_mode": "fan_only",
+            "current_temperature": 22.0,
+            "temperature": 22.0,
+        },
+    )
+    await hass.async_block_till_done()
+
+    # No action expected (fan_only is not in supported modes)
+    assert len(calls) == 0
+
+    # Step 2: Setpoint changes while in fan mode
+    hass.states.async_set(
+        "climate.test_ac",
+        "fan_only",
+        {
+            "hvac_mode": "fan_only",
+            "current_temperature": 22.0,
+            "temperature": 24.0,  # Changed
+        },
+    )
+    await hass.async_block_till_done()
+
+    # Still no action (fan_only is not supported)
+    assert len(calls) == 0
+
+    # Step 3: User switches to cool mode
+    hass.states.async_set(
+        "climate.test_ac",
+        "cool",
+        {
+            "hvac_mode": "cool",
+            "current_temperature": 22.0,
+            "temperature": 24.0,
+        },
+    )
+    await hass.async_block_till_done()
+
+    # Now the hvac_mode trigger fires AND conditions are met (cool is supported)
+    # Follow Me should calculate and apply the setpoint
+    # external = 22, internal = 22, offset = 0, target = 22
+    # setpoint = 22 - 0 = 22.0
+    assert len(calls) == 1
+    assert calls[0].data["temperature"] == 22.0
+
+
+@pytest.mark.asyncio
+async def test_mode_switch_with_sensor_offset_present(
+    hass: HomeAssistant,
+) -> None:
+    """
+    Realistic scenario: external sensor warmer than internal.
+    AC starts in fan → switch to cool → Follow Me should apply offset correction.
+    """
+    # Initialize with fan mode BEFORE setup to avoid triggering on the initial state
+    hass.states.async_set(
+        "climate.test_ac",
+        "fan_only",
+        {
+            "hvac_mode": "fan_only",
+            "current_temperature": 22.0,
+            "temperature": 22.0,
+        },
+    )
+    hass.states.async_set(
+        "sensor.external_temp",
+        "24.0",
+        {"unit_of_measurement": "°C", "device_class": "temperature"},
+    )
+    hass.states.async_set("input_number.target_temp", "22.0")
+
+    calls = async_mock_service(hass, "climate", "set_temperature")
+
+    await setup_blueprint(hass)
+    await hass.async_block_till_done()
+
+    # No action expected (AC in fan mode, not supported)
+    assert len(calls) == 0
+
+    # Switch to cool mode
+    hass.states.async_set(
+        "climate.test_ac",
+        "cool",
+        {
+            "hvac_mode": "cool",
+            "current_temperature": 22.0,
+            "temperature": 22.0,
+        },
+    )
+    await hass.async_block_till_done()
+
+    # Should apply correction: target=22, offset=(24-22)*1.0=2, setpoint=22-2=20
+    assert len(calls) == 1
+    assert calls[0].data["temperature"] == 20.0
+
+
+@pytest.mark.asyncio
+async def test_hvac_mode_read_from_state_not_attribute(
+    hass: HomeAssistant,
+) -> None:
+    """
+    Verify that hvac_mode is read from the state, not the attribute.
+    The attribute 'hvac_modes' (plural) contains the list of available modes.
+    The current mode is in the state of the climate entity.
+    """
+    # Start in fan_only (unsupported) to avoid initial trigger
+    hass.states.async_set(
+        "climate.test_ac",
+        "fan_only",
+        {
+            "current_temperature": 22.0,
+            "temperature": 22.0,
+            "hvac_modes": ["off", "heat", "dry", "cool", "fan_only", "heat_cool"],
+        },
+    )
+    hass.states.async_set(
+        "sensor.external_temp",
+        "22.0",
+        {"unit_of_measurement": "°C", "device_class": "temperature"},
+    )
+    hass.states.async_set("input_number.target_temp", "22.0")
+
+    calls = async_mock_service(hass, "climate", "set_temperature")
+
+    await setup_blueprint(hass)
+    await hass.async_block_till_done()
+
+    # Should not have triggered (fan_only is not supported)
+    assert len(calls) == 0
+
+    climate_state = hass.states.get("climate.test_ac")
+    
+    # The state should be "fan_only" (current mode)
+    assert climate_state.state == "fan_only"
+    
+    # The attribute hvac_modes contains all available modes
+    assert "cool" in climate_state.attributes.get("hvac_modes", [])
+
+    # Now switch to cool mode
+    hass.states.async_set(
+        "climate.test_ac",
+        "cool",
+        {
+            "current_temperature": 22.0,
+            "temperature": 22.0,
+            "hvac_modes": ["off", "heat", "dry", "cool", "fan_only", "heat_cool"],
+        },
+    )
+    await hass.async_block_till_done()
+    
+    # Clear calls from mode change
+    calls.clear()
+    
+    # Now trigger with external sensor change
+    hass.states.async_set(
+        "sensor.external_temp",
+        "24.0",
+        {"unit_of_measurement": "°C", "device_class": "temperature"},
+    )
+    await hass.async_block_till_done()
+    
+    # Should have triggered and applied correction
+    assert len(calls) == 1
+    assert calls[0].data["temperature"] == 20.0  # offset = 2, setpoint = 22 - 2 = 20

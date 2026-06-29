@@ -61,8 +61,6 @@ trigger:
 
   - platform: state
     entity_id: !input climate_entity
-    attribute: hvac_mode
-
 
 variables:
 
@@ -106,6 +104,19 @@ variables:
 
 condition:
 
+  # If triggered by climate entity, verify it's a real state change (not just attributes)
+  - condition: template
+    value_template: >
+      {% if trigger.platform == 'state' and trigger.entity_id == climate %}
+        {# Only proceed if state actually changed #}
+        {% set old_state = trigger.from_state.state if trigger.from_state else states(climate) %}
+        {% set new_state = trigger.to_state.state if trigger.to_state else states(climate) %}
+        {{ old_state != new_state }}
+      {% else %}
+        {# Always proceed for external_sensor and user_target triggers #}
+        true
+      {% endif %}
+
   # Climate must be available
   - condition: template
     value_template: >
@@ -114,7 +125,7 @@ condition:
   # Only act in supported HVAC modes
   - condition: template
     value_template: >
-      {{ state_attr(climate, 'hvac_mode') in ['cool', 'heat', 'heat_cool'] }}
+      {{ states(climate) in ['cool', 'heat', 'heat_cool'] }}
 
 
 action:
