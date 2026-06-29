@@ -68,7 +68,7 @@ blueprint:
       description: >
         Optional input_text helper used to store the last Follow Me
         calculation for debugging.
-      default: ""
+      default: null
       selector:
         entity:
           domain: input_text
@@ -177,11 +177,11 @@ action:
       - conditions:
           - condition: template
             value_template: >
-              {{ diagnostics_helper_id != '' }}
+              {{ diagnostics_helper_id is not none }}
         sequence:
           - service: input_text.set_value
             target:
-              entity_id: !input diagnostics_helper
+              entity_id: "{{ diagnostics_helper_id }}"
             data:
               value: "{{ diagnostics_message }}"
 
