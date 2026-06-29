@@ -18,7 +18,7 @@ Synchronizes the climate target temperature with an `input_number` helper. This 
 
 **Installation:**
 
-[![Open your Home Assistant instance and show the blueprint import dialog with a specific blueprint pre-filled.](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fraw.githubusercontent.com%2F[USERNAME]%2F[REPO]%2Fmain%2Fblueprints%2Fac_sync_setpoint_to_input_number.yaml)
+[![Open your Home Assistant instance and show the blueprint import dialog with a specific blueprint pre-filled.](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fraw.githubusercontent.com%2Fhectorespert%2Fblueprints%2Fmain%2Fblueprints%2Fac_sync_setpoint_to_input_number.yaml)
 
 Or manually: `automations/blueprints/ac_sync_setpoint_to_input_number.yaml`
 
@@ -44,7 +44,7 @@ setpoint = user_target - (external_temp - internal_temp) * gain
 
 **Installation:**
 
-[![Open your Home Assistant instance and show the blueprint import dialog with a specific blueprint pre-filled.](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fraw.githubusercontent.com%2F[USERNAME]%2F[REPO]%2Fmain%2Fblueprints%2Fac_follow_me.yaml)
+[![Open your Home Assistant instance and show the blueprint import dialog with a specific blueprint pre-filled.](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fraw.githubusercontent.com%2Fhectorespert%2Fblueprints%2Fmain%2Fblueprints%2Fac_follow_me.yaml)
 
 Or manually: `automations/blueprints/ac_follow_me.yaml`
 
