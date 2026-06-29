@@ -1,0 +1,129 @@
+blueprint:
+  name: Virtual Follow Me AC v1
+  description: >
+    Basic Follow Me system.
+    Compares the external sensor (user's real zone) with the AC's internal
+    sensor and adjusts the setpoint to compensate the difference.
+
+    Formula: setpoint = user_target - (external_temp - internal_temp) * gain
+  domain: automation
+
+  input:
+
+    climate_entity:
+      name: Air conditioner
+      selector:
+        entity:
+          domain: climate
+
+    external_sensor:
+      name: External temperature sensor (user zone)
+      selector:
+        entity:
+          domain: sensor
+          device_class: temperature
+
+    user_target:
+      name: Target temperature (input_number)
+      selector:
+        entity:
+          domain: input_number
+
+    gain:
+      name: Correction gain
+      description: >
+        Adjustment intensity:
+        0.5 soft / 0.7 recommended / 1.0 direct
+      default: 0.7
+      selector:
+        number:
+          min: 0.1
+          max: 2.0
+          step: 0.1
+
+    max_offset:
+      name: Maximum correction (°C)
+      default: 2
+      selector:
+        number:
+          min: 0.5
+          max: 5.0
+          step: 0.5
+
+
+trigger:
+
+  - platform: state
+    entity_id: !input external_sensor
+
+  - platform: state
+    entity_id: !input user_target
+
+  - platform: state
+    entity_id: !input climate_entity
+    attribute: hvac_mode
+
+
+variables:
+
+  climate: !input climate_entity
+  external_sensor_id: !input external_sensor
+  user_target_id: !input user_target
+  gain_val: !input gain
+  max_offset_val: !input max_offset
+
+  # Base comfort target set by the user
+  target: >
+    {{ states(user_target_id) | float(0) }}
+
+  # Temperature read from the external sensor (user's real zone)
+  external_temp: >
+    {{ states(external_sensor_id) | float(0) }}
+
+  # Temperature read from the AC's internal sensor (biased zone)
+  internal_temp: >
+    {{ state_attr(climate, 'current_temperature') | float(0) }}
+
+  # Proportional offset scaled by gain
+  raw_offset: >
+    {{ (external_temp - internal_temp) * gain_val }}
+
+  # Clamp offset to avoid overcorrection
+  bounded_offset: >
+    {% set o = raw_offset %}
+    {% if o > max_offset_val %}
+      {{ max_offset_val }}
+    {% elif o < -max_offset_val %}
+      {{ -max_offset_val }}
+    {% else %}
+      {{ o }}
+    {% endif %}
+
+  # Final setpoint rounded to nearest 0.5°C
+  final_setpoint: >
+    {{ ((target - bounded_offset) * 2) | round(0) / 2 }}
+
+
+condition:
+
+  # Climate must be available
+  - condition: template
+    value_template: >
+      {{ states(climate) not in ['unavailable', 'unknown'] }}
+
+  # Only act in supported HVAC modes
+  - condition: template
+    value_template: >
+      {{ state_attr(climate, 'hvac_mode') in ['cool', 'heat', 'heat_cool'] }}
+
+
+action:
+
+  - service: climate.set_temperature
+    target:
+      entity_id: !input climate_entity
+    data:
+      temperature: "{{ final_setpoint }}"
+
+
+mode: restart

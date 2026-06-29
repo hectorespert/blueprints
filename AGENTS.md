@@ -69,6 +69,12 @@ python3 -m venv .venv
 pip install -r requirements-test.txt
 pytest -q
 
+## Language
+
+Always use English for all code artifacts: variable names, comments, blueprint
+descriptions, input names, and test identifiers. This applies to blueprints,
+Python test files, and any other file in the repository.
+
 ## Quality Criteria Before Merge
 
 1. All tests pass locally.
