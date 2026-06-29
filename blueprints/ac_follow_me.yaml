@@ -63,6 +63,16 @@ blueprint:
           max: 2.0
           step: 0.5
 
+    diagnostics_helper:
+      name: Diagnostics helper (optional)
+      description: >
+        Optional input_text helper used to store the last Follow Me
+        calculation for debugging.
+      default: ""
+      selector:
+        entity:
+          domain: input_text
+
 
 trigger:
 
@@ -83,6 +93,7 @@ variables:
   gain_val: !input gain
   max_offset_val: !input max_offset
   hysteresis_val: !input hysteresis
+  diagnostics_helper_id: !input diagnostics_helper
 
   # Base comfort target set by the user
   target: >
@@ -119,6 +130,21 @@ variables:
   current_setpoint: >
     {{ state_attr(climate, 'temperature') | float(0) }}
 
+  # Whether the calculated setpoint change is large enough to apply
+  should_apply: >
+    {{ (final_setpoint - current_setpoint) | abs >= hysteresis_val }}
+
+  # Compact diagnostics string for debugging in an input_text helper
+  diagnostics_message: >
+    m={{ states(climate) }}
+    e={{ (external_temp | float(0)) | round(1) }}
+    i={{ (internal_temp | float(0)) | round(1) }}
+    t={{ (target | float(0)) | round(1) }}
+    o={{ (bounded_offset | float(0)) | round(1) }}
+    f={{ (final_setpoint | float(0)) | round(1) }}
+    c={{ (current_setpoint | float(0)) | round(1) }}
+    a={{ should_apply }}
+
 
 condition:
 
@@ -145,19 +171,31 @@ condition:
     value_template: >
       {{ states(climate) in ['cool', 'heat', 'heat_cool'] }}
 
-  # Only send command if setpoint change meets or exceeds the hysteresis threshold
-  - condition: template
-    value_template: >
-      {{ (final_setpoint - current_setpoint) | abs >= hysteresis_val }}
-
-
 action:
 
-  - service: climate.set_temperature
-    target:
-      entity_id: !input climate_entity
-    data:
-      temperature: "{{ final_setpoint }}"
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: >
+              {{ diagnostics_helper_id != '' }}
+        sequence:
+          - service: input_text.set_value
+            target:
+              entity_id: !input diagnostics_helper
+            data:
+              value: "{{ diagnostics_message }}"
+
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: >
+              {{ should_apply }}
+        sequence:
+          - service: climate.set_temperature
+            target:
+              entity_id: !input climate_entity
+            data:
+              temperature: "{{ final_setpoint }}"
 
 
 mode: restart

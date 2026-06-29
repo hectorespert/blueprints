@@ -40,6 +40,7 @@ setpoint = user_target - (external_temp - internal_temp) * gain
 - Offset clamping to prevent overcorrection
 - Automatic rounding to 0.5°C increments
 - Hysteresis threshold to prevent oscillations near setpoint
+- Optional built-in diagnostics logging to an `input_text` helper
 - Support for cool, heat, and heat_cool modes
 - Works with external sensors and AC's internal temperature probe
 
@@ -77,7 +78,7 @@ We are planning significant enhancements to improve stability, user experience, 
 - [ ] **Equipment Limits** - Respect min/max temperature constraints of the AC unit
 
 ### **Phase 2: Diagnostics & Precision (v2.1)**
-- [ ] **Built-in Diagnostics** - Log last calculation to `input_text` for debugging
+- [x] **Built-in Diagnostics** - Log last calculation to `input_text` for debugging
 - [ ] **Dynamic Step Rounding** - Auto-detect AC's temperature step precision
 
 ### **Implementation Timeline**

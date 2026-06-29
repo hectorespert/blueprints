@@ -670,6 +670,66 @@ async def test_default_hysteresis_blocks_same_setpoint(
     assert len(calls) == 0
 
 
+@pytest.mark.asyncio
+async def test_diagnostics_helper_is_optional(hass: HomeAssistant) -> None:
+    """No diagnostics service call is made when the optional helper is not configured."""
+    climate_calls = async_mock_service(hass, "climate", "set_temperature")
+    diagnostics_calls = async_mock_service(hass, "input_text", "set_value")
+
+    await setup_blueprint(hass)
+
+    hass.states.async_set(
+        "sensor.external_temp",
+        "24.0",
+        {"unit_of_measurement": "°C", "device_class": "temperature"},
+    )
+    await hass.async_block_till_done()
+
+    assert len(climate_calls) == 1
+    assert climate_calls[0].data["temperature"] == 20.0
+    assert len(diagnostics_calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_diagnostics_helper_logs_last_calculation_even_without_action(
+    hass: HomeAssistant,
+) -> None:
+    """Diagnostics store the last calculation even when hysteresis blocks the command."""
+    climate_calls = async_mock_service(hass, "climate", "set_temperature")
+    diagnostics_calls = async_mock_service(hass, "input_text", "set_value")
+
+    hass.states.async_set("input_text.follow_me_debug", "")
+
+    await setup_blueprint(
+        hass,
+        {
+            **DEFAULT_INPUT,
+            "diagnostics_helper": "input_text.follow_me_debug",
+            "hysteresis": 1.0,
+        },
+    )
+
+    hass.states.async_set(
+        "sensor.external_temp",
+        "22.5",
+        {"unit_of_measurement": "°C", "device_class": "temperature"},
+    )
+    await hass.async_block_till_done()
+
+    assert len(climate_calls) == 0
+    assert len(diagnostics_calls) == 1
+
+    diagnostics_message = diagnostics_calls[0].data["value"]
+    assert "m=cool" in diagnostics_message
+    assert "e=22.5" in diagnostics_message
+    assert "i=22.0" in diagnostics_message
+    assert "t=22.0" in diagnostics_message
+    assert "o=0.5" in diagnostics_message
+    assert "f=21.5" in diagnostics_message
+    assert "c=22.0" in diagnostics_message
+    assert "a=False" in diagnostics_message
+
+
 @pytest.mark.parametrize(
     "target,external,internal,current_sp,gain,max_offset,expected",
     [
