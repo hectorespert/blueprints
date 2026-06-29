@@ -50,6 +50,19 @@ blueprint:
           max: 5.0
           step: 0.5
 
+    hysteresis:
+      name: Hysteresis (°C)
+      description: >
+        Minimum setpoint change required before sending a command.
+        Prevents oscillations when temperature fluctuates near the setpoint.
+        Default 0.5 matches the rounding step and avoids redundant updates.
+      default: 0.5
+      selector:
+        number:
+          min: 0.0
+          max: 2.0
+          step: 0.5
+
 
 trigger:
 
@@ -69,6 +82,7 @@ variables:
   user_target_id: !input user_target
   gain_val: !input gain
   max_offset_val: !input max_offset
+  hysteresis_val: !input hysteresis
 
   # Base comfort target set by the user
   target: >
@@ -131,10 +145,10 @@ condition:
     value_template: >
       {{ states(climate) in ['cool', 'heat', 'heat_cool'] }}
 
-  # Only send command if setpoint actually differs from current
+  # Only send command if setpoint change meets or exceeds the hysteresis threshold
   - condition: template
     value_template: >
-      {{ final_setpoint != current_setpoint }}
+      {{ (final_setpoint - current_setpoint) | abs >= hysteresis_val }}
 
 
 action:
