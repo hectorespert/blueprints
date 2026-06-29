@@ -1,7 +1,7 @@
 # HomeAssistant Blueprints
 
 
-My HomeAssistant Blueprints
+Home Assistant blueprints collection.
 
 ## Tests
 
