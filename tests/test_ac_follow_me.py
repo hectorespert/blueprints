@@ -593,7 +593,7 @@ async def test_no_op_when_setpoint_change_is_below_hysteresis(
     calls = async_mock_service(hass, "climate", "set_temperature")
 
     # current AC setpoint = 22.0; with external=22.5, offset=0.5, final=21.5
-    # |21.5 - 22.0| = 0.5, which is below hysteresis=1.0 → no action
+    # |21.5 - 22.0| = 0.5, which is strictly below hysteresis=1.0 → no action
     await setup_blueprint(hass, {**DEFAULT_INPUT, "hysteresis": 1.0})
 
     hass.states.async_set(
@@ -614,7 +614,7 @@ async def test_acts_when_setpoint_change_meets_hysteresis_threshold(
     calls = async_mock_service(hass, "climate", "set_temperature")
 
     # current AC setpoint = 22.0; with external=23.0, offset=1.0, final=21.0
-    # |21.0 - 22.0| = 1.0 >= hysteresis=1.0 → action
+    # |21.0 - 22.0| = 1.0, which exactly equals hysteresis=1.0 → action
     await setup_blueprint(hass, {**DEFAULT_INPUT, "hysteresis": 1.0})
 
     hass.states.async_set(
@@ -636,7 +636,7 @@ async def test_hysteresis_zero_allows_any_change(
     calls = async_mock_service(hass, "climate", "set_temperature")
 
     # current AC setpoint = 22.0; with external=22.5, offset=0.5, final=21.5
-    # |21.5 - 22.0| = 0.5 >= hysteresis=0.0 → action
+    # hysteresis=0.0 means any non-zero change triggers: |21.5 - 22.0| = 0.5 > 0.0 → action
     await setup_blueprint(hass, {**DEFAULT_INPUT, "hysteresis": 0.0})
 
     hass.states.async_set(
