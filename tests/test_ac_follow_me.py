@@ -583,3 +583,103 @@ async def test_recalculates_when_setpoint_differs(
     # Current setpoint is 21.0, so should trigger
     assert len(calls) == 2
     assert calls[1].data["temperature"] == 20.0
+
+
+@pytest.mark.parametrize(
+    "target,external,internal,current_sp,gain,max_offset,expected",
+    [
+        # (target, external, internal, current_setpoint, gain, max_offset, expected_setpoint)
+        pytest.param(
+            25.0,
+            24.3,
+            22.0,
+            22.0,
+            0.7,
+            2.0,
+            23.5,
+            id="target_25_ext_24_3_int_22_gain_0_7",
+        ),
+        pytest.param(
+            25.0,
+            24.3,
+            25.5,
+            25.0,
+            0.7,
+            2.0,
+            26.0,
+            id="target_25_ext_24_3_int_25_5_gain_0_7",
+        ),
+        pytest.param(
+            22.0,
+            20.0,
+            22.0,
+            22.0,
+            1.0,
+            2.0,
+            24.0,
+            id="target_22_ext_20_negative_offset",
+        ),
+        pytest.param(
+            23.0,
+            23.0,
+            22.0,
+            22.0,
+            0.5,
+            2.0,
+            22.5,
+            id="target_23_ext_23_gain_0_5",
+        ),
+        pytest.param(
+            20.0,
+            26.0,
+            22.0,
+            22.0,
+            1.0,
+            1.5,
+            18.5,
+            id="target_20_ext_26_clamped_to_1_5",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_follow_me_scenarios(
+    hass: HomeAssistant,
+    target: float,
+    external: float,
+    internal: float,
+    current_sp: float,
+    gain: float,
+    max_offset: float,
+    expected: float,
+) -> None:
+    """
+    Parametrized test covering various Follow Me scenarios:
+    - Different comfort targets (20-25°C)
+    - Various external/internal temperature differences
+    - Different gain values (soft, recommended, direct)
+    - Offset clamping in effect
+    """
+    calls = async_mock_service(hass, "climate", "set_temperature")
+
+    hass.states.async_set("input_number.target_temp", str(target))
+    hass.states.async_set(
+        "climate.test_ac",
+        "cool",
+        {
+            "hvac_mode": "cool",
+            "current_temperature": internal,
+            "temperature": current_sp,
+        },
+    )
+
+    await setup_blueprint(hass, {**DEFAULT_INPUT, "gain": gain, "max_offset": max_offset})
+
+    hass.states.async_set(
+        "sensor.external_temp",
+        str(external),
+        {"unit_of_measurement": "°C", "device_class": "temperature"},
+    )
+    await hass.async_block_till_done()
+
+    assert len(calls) == 1
+    assert calls[0].data["temperature"] == expected
