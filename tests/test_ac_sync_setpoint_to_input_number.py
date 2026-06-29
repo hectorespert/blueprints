@@ -1,5 +1,5 @@
 import pytest
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, Context
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import async_mock_service
 
@@ -127,3 +127,103 @@ async def test_uses_updated_climate_attribute_value(hass: HomeAssistant) -> None
     assert len(calls) == 2
     assert calls[0].data["value"] == 24.0
     assert calls[1].data["value"] == 24.7
+
+
+@pytest.mark.asyncio
+async def test_does_not_sync_when_change_caused_by_automation(
+    hass: HomeAssistant,
+) -> None:
+    """
+    Setpoint changes caused by an automation (e.g. Follow Me) must not be synced
+    back to input_number. Doing so would create a feedback loop that drifts the
+    setpoint to extreme values.
+
+    Automation-caused state changes carry a context with parent_id set and
+    user_id unset. The blueprint condition must block those.
+    """
+    calls = async_mock_service(hass, "input_number", "set_value")
+
+    await setup_blueprint(
+        hass,
+        {
+            "climate_entity": "climate.test_ac",
+            "target_helper": "input_number.test_target",
+            "min_change": 0.1,
+            "sync_delay_minutes": 0,
+        },
+    )
+
+    automation_context = Context(parent_id="follow-me-automation-run-id")
+    hass.states.async_set(
+        "climate.test_ac",
+        "cool",
+        {"temperature": 20.0},
+        context=automation_context,
+    )
+    await hass.async_block_till_done()
+
+    assert len(calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_syncs_when_change_has_no_context(
+    hass: HomeAssistant,
+) -> None:
+    """
+    Setpoint changes from a physical remote (or any external integration)
+    arrive with no parent_id and no user_id. Sync must fire for these.
+    """
+    calls = async_mock_service(hass, "input_number", "set_value")
+
+    await setup_blueprint(
+        hass,
+        {
+            "climate_entity": "climate.test_ac",
+            "target_helper": "input_number.test_target",
+            "min_change": 0.1,
+            "sync_delay_minutes": 0,
+        },
+    )
+
+    hass.states.async_set(
+        "climate.test_ac",
+        "cool",
+        {"temperature": 23.0},
+    )
+    await hass.async_block_till_done()
+
+    assert len(calls) == 1
+    assert calls[0].data["value"] == 23.0
+
+
+@pytest.mark.asyncio
+async def test_syncs_when_change_has_user_context(
+    hass: HomeAssistant,
+) -> None:
+    """
+    Setpoint changes initiated by a user from the HA dashboard carry a
+    user_id in their context. Sync must fire for these.
+    """
+    calls = async_mock_service(hass, "input_number", "set_value")
+
+    await setup_blueprint(
+        hass,
+        {
+            "climate_entity": "climate.test_ac",
+            "target_helper": "input_number.test_target",
+            "min_change": 0.1,
+            "sync_delay_minutes": 0,
+        },
+    )
+
+    user_context = Context(user_id="dashboard-user-id-123")
+    hass.states.async_set(
+        "climate.test_ac",
+        "cool",
+        {"temperature": 24.0},
+        context=user_context,
+    )
+    await hass.async_block_till_done()
+
+    assert len(calls) == 1
+    assert calls[0].data["value"] == 24.0

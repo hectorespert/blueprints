@@ -11,7 +11,7 @@ Pipeline under test:
 
 import pytest
 from datetime import timedelta
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant, Context, callback
 from homeassistant.setup import async_setup_component
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import async_mock_service
@@ -264,3 +264,69 @@ async def test_sync_respects_stabilization_delay(
     assert len(climate_calls) >= 1
     if len(climate_calls) > 0:
         assert climate_calls[-1].data["temperature"] == 21.0
+
+
+@pytest.mark.asyncio
+async def test_follow_me_correction_does_not_cause_feedback_loop(
+    hass: HomeAssistant,
+) -> None:
+    """
+    Reproduces the original feedback loop bug:
+      1. Follow Me applies a correction → climate setpoint changes (automation context).
+      2. Sync detects the change but must NOT sync it back to input_number.
+      3. input_number stays at the user's original target.
+      4. Follow Me does NOT retrigger → no drift.
+
+    Without the context-based guard in the sync blueprint, the loop would be:
+      follow_me lowers setpoint → sync copies lowered value to input_number →
+      follow_me lowers it again → ... → extreme values.
+    """
+    # Register the real input_number service so state updates propagate
+    @callback
+    def handle_set_value(call):
+        entity_id = call.data.get("entity_id")
+        if isinstance(entity_id, list):
+            entity_id = entity_id[0]
+        hass.states.async_set(entity_id, str(call.data["value"]))
+
+    hass.services.async_register("input_number", "set_value", handle_set_value)
+
+    climate_calls = async_mock_service(hass, "climate", "set_temperature")
+
+    await setup_both_blueprints(hass)
+
+    # Step 1: Trigger Follow Me via a sensor value change (autouse sets it to 24.0,
+    # so we move it to 25.0 to produce a real state_changed event).
+    # offset = (25 - 22) * 0.7 = 2.1 → clamped to 2.0 → setpoint = 22 - 2 = 20.0
+    hass.states.async_set(
+        "sensor.external_temp",
+        "25.0",
+        {"unit_of_measurement": "°C", "device_class": "temperature"},
+    )
+    await hass.async_block_till_done()
+
+    # Follow Me should have fired once
+    assert len(climate_calls) == 1
+    assert climate_calls[0].data["temperature"] == 20.0
+
+    # Step 2: Simulate the AC state updating due to the Follow Me command.
+    # This change is caused by the Follow Me automation, so we mark it with
+    # an automation context (parent_id set, no user_id).
+    automation_context = Context(parent_id="follow-me-run-id")
+    hass.states.async_set(
+        "climate.test_ac",
+        "cool",
+        {
+            "hvac_mode": "cool",
+            "current_temperature": 22.0,
+            "temperature": 20.0,  # Follow Me's corrected setpoint
+        },
+        context=automation_context,
+    )
+    await hass.async_block_till_done()
+
+    # Sync must NOT have updated input_number (automation context blocks it)
+    assert hass.states.get("input_number.target_temp").state == "22.0"
+
+    # Follow Me must NOT have retriggered (no new climate calls)
+    assert len(climate_calls) == 1

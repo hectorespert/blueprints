@@ -65,6 +65,14 @@ condition:
     value_template: >
       {{ (new_temp - helper_temp) | abs >= min_delta }}
 
+  # Only sync changes initiated by the user (physical remote or dashboard).
+  # Automation-caused changes (e.g. Follow Me) have parent_id set and no user_id;
+  # syncing those would create a feedback loop that drifts the setpoint to extremes.
+  - condition: template
+    value_template: >
+      {{ trigger.to_state.context.parent_id is none or
+         trigger.to_state.context.user_id is not none }}
+
 action:
   - service: input_number.set_value
     target:
