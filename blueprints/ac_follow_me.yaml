@@ -101,6 +101,10 @@ variables:
   final_setpoint: >
     {{ ((target - bounded_offset) * 2) | round(0) / 2 }}
 
+  # Current target temperature in the AC
+  current_setpoint: >
+    {{ state_attr(climate, 'temperature') | float(0) }}
+
 
 condition:
 
@@ -126,6 +130,11 @@ condition:
   - condition: template
     value_template: >
       {{ states(climate) in ['cool', 'heat', 'heat_cool'] }}
+
+  # Only send command if setpoint actually differs from current
+  - condition: template
+    value_template: >
+      {{ final_setpoint != current_setpoint }}
 
 
 action:

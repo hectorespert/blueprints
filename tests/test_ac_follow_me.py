@@ -436,3 +436,150 @@ async def test_hvac_mode_read_from_state_not_attribute(
     # Should have triggered and applied correction
     assert len(calls) == 1
     assert calls[0].data["temperature"] == 20.0  # offset = 2, setpoint = 22 - 2 = 20
+
+
+@pytest.mark.asyncio
+async def test_no_op_when_setpoint_already_correct(
+    hass: HomeAssistant,
+) -> None:
+    """
+    When the calculated setpoint equals the current AC setpoint,
+    no command should be sent (prevents feedback loops).
+    """
+    calls = async_mock_service(hass, "climate", "set_temperature")
+
+    await setup_blueprint(hass)
+
+    # Set external temp to 24.0, which would calculate: 22.0 - 2.0 = 20.0
+    hass.states.async_set(
+        "sensor.external_temp",
+        "24.0",
+        {"unit_of_measurement": "°C", "device_class": "temperature"},
+    )
+    await hass.async_block_till_done()
+
+    # First call should happen
+    assert len(calls) == 1
+    assert calls[0].data["temperature"] == 20.0
+
+    # Now update the AC's current_temperature to 21.0 but keep setpoint at 20.0
+    # (simulating AC adjusting its own internal temp after the command)
+    hass.states.async_set(
+        "climate.test_ac",
+        "cool",
+        {
+            "hvac_mode": "cool",
+            "current_temperature": 21.0,
+            "temperature": 20.0,  # Already set to correct value
+        },
+    )
+    await hass.async_block_till_done()
+
+    # Should NOT trigger a new command because setpoint is already correct
+    # (the climate state change triggers but condition blocks it)
+    assert len(calls) == 1  # Still just the first call
+
+
+@pytest.mark.asyncio
+async def test_no_feedback_loop_on_continuous_triggers(
+    hass: HomeAssistant,
+) -> None:
+    """
+    Reproduces the original issue: continuous temperature drops.
+    Verifies that the new condition prevents feedback loops.
+    """
+    calls = async_mock_service(hass, "climate", "set_temperature")
+
+    await setup_blueprint(hass)
+
+    # Simulate external temp change that requires setpoint correction
+    hass.states.async_set(
+        "sensor.external_temp",
+        "24.0",
+        {"unit_of_measurement": "°C", "device_class": "temperature"},
+    )
+    await hass.async_block_till_done()
+
+    # First execution should happen
+    assert len(calls) == 1
+    assert calls[0].data["temperature"] == 20.0
+
+    # Simulate AC's internal sensor adjusting temperature
+    # (this would trigger the automation again in the original bug)
+    hass.states.async_set(
+        "climate.test_ac",
+        "cool",
+        {
+            "hvac_mode": "cool",
+            "current_temperature": 21.0,  # Internal temp changed
+            "temperature": 20.0,  # But setpoint is already at target
+        },
+    )
+    await hass.async_block_till_done()
+
+    # Should NOT make another call because final_setpoint (20.0) == current_setpoint (20.0)
+    assert len(calls) == 1
+
+    # Simulate another internal temp update
+    hass.states.async_set(
+        "climate.test_ac",
+        "cool",
+        {
+            "hvac_mode": "cool",
+            "current_temperature": 20.5,
+            "temperature": 20.0,
+        },
+    )
+    await hass.async_block_till_done()
+
+    # Still should be just 1 call (no feedback loop)
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_recalculates_when_setpoint_differs(
+    hass: HomeAssistant,
+) -> None:
+    """
+    Verifies that the automation DOES send a command when the calculated
+    setpoint differs from the current AC setpoint.
+    """
+    calls = async_mock_service(hass, "climate", "set_temperature")
+
+    await setup_blueprint(hass)
+
+    # Initial external temp: calculate setpoint = 20.0
+    hass.states.async_set(
+        "sensor.external_temp",
+        "24.0",
+        {"unit_of_measurement": "°C", "device_class": "temperature"},
+    )
+    await hass.async_block_till_done()
+
+    assert len(calls) == 1
+    assert calls[0].data["temperature"] == 20.0
+
+    # Now AC's setpoint is manually changed to 21.0 (user or other automation)
+    hass.states.async_set(
+        "climate.test_ac",
+        "cool",
+        {
+            "hvac_mode": "cool",
+            "current_temperature": 22.0,
+            "temperature": 21.0,  # Different from calculated (20.0)
+        },
+    )
+    await hass.async_block_till_done()
+
+    # Now trigger with a new sensor value
+    hass.states.async_set(
+        "sensor.external_temp",
+        "25.0",
+        {"unit_of_measurement": "°C", "device_class": "temperature"},
+    )
+    await hass.async_block_till_done()
+
+    # New setpoint: offset = (25-22)*1.0 = 3, clamped to 2, setpoint = 22-2 = 20.0
+    # Current setpoint is 21.0, so should trigger
+    assert len(calls) == 2
+    assert calls[1].data["temperature"] == 20.0
