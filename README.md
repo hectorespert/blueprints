@@ -39,6 +39,7 @@ setpoint = user_target - (external_temp - internal_temp) * gain
 - Proportional offset calculation with configurable gain
 - Offset clamping to prevent overcorrection
 - Automatic rounding to 0.5°C increments
+- Hysteresis threshold to prevent oscillations near setpoint
 - Support for cool, heat, and heat_cool modes
 - Works with external sensors and AC's internal temperature probe
 
@@ -68,7 +69,7 @@ This creates a pipeline: `Remote/Dashboard → Sync → Input Number → Follow 
 We are planning significant enhancements to improve stability, user experience, and energy efficiency:
 
 ### **Phase 1: Core Stability (v2.0)**
-- [ ] **Hysteresis Anti-Jitter** - Prevent oscillations when temperature fluctuates near setpoint
+- [x] **Hysteresis Anti-Jitter** - Prevent oscillations when temperature fluctuates near setpoint
 - [ ] **Temporal Stabilization** - Wait for sensor reading stability before applying changes
 - [ ] **Multiple External Sensors** - Average temperature from multiple zones/rooms
 - [ ] **Advanced Rate Limiting** - Limit max temperature change per hour (e.g., 3°C/h)

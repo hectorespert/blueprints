@@ -585,6 +585,91 @@ async def test_recalculates_when_setpoint_differs(
     assert calls[1].data["temperature"] == 20.0
 
 
+@pytest.mark.asyncio
+async def test_no_op_when_setpoint_change_is_below_hysteresis(
+    hass: HomeAssistant,
+) -> None:
+    """No command when the calculated change is smaller than the hysteresis threshold."""
+    calls = async_mock_service(hass, "climate", "set_temperature")
+
+    # current AC setpoint = 22.0; with external=22.5, offset=0.5, final=21.5
+    # |21.5 - 22.0| = 0.5, which is strictly below hysteresis=1.0 → no action
+    await setup_blueprint(hass, {**DEFAULT_INPUT, "hysteresis": 1.0})
+
+    hass.states.async_set(
+        "sensor.external_temp",
+        "22.5",
+        {"unit_of_measurement": "°C", "device_class": "temperature"},
+    )
+    await hass.async_block_till_done()
+
+    assert len(calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_acts_when_setpoint_change_meets_hysteresis_threshold(
+    hass: HomeAssistant,
+) -> None:
+    """Command is sent when the calculated change equals the hysteresis threshold."""
+    calls = async_mock_service(hass, "climate", "set_temperature")
+
+    # current AC setpoint = 22.0; with external=23.0, offset=1.0, final=21.0
+    # |21.0 - 22.0| = 1.0, which exactly equals hysteresis=1.0 → action
+    await setup_blueprint(hass, {**DEFAULT_INPUT, "hysteresis": 1.0})
+
+    hass.states.async_set(
+        "sensor.external_temp",
+        "23.0",
+        {"unit_of_measurement": "°C", "device_class": "temperature"},
+    )
+    await hass.async_block_till_done()
+
+    assert len(calls) == 1
+    assert calls[0].data["temperature"] == 21.0
+
+
+@pytest.mark.asyncio
+async def test_hysteresis_zero_allows_any_change(
+    hass: HomeAssistant,
+) -> None:
+    """Setting hysteresis to 0.0 allows any non-zero setpoint change to trigger."""
+    calls = async_mock_service(hass, "climate", "set_temperature")
+
+    # current AC setpoint = 22.0; with external=22.5, offset=0.5, final=21.5
+    # hysteresis=0.0 means any non-zero change triggers: |21.5 - 22.0| = 0.5 > 0.0 → action
+    await setup_blueprint(hass, {**DEFAULT_INPUT, "hysteresis": 0.0})
+
+    hass.states.async_set(
+        "sensor.external_temp",
+        "22.5",
+        {"unit_of_measurement": "°C", "device_class": "temperature"},
+    )
+    await hass.async_block_till_done()
+
+    assert len(calls) == 1
+    assert calls[0].data["temperature"] == 21.5
+
+
+@pytest.mark.asyncio
+async def test_default_hysteresis_blocks_same_setpoint(
+    hass: HomeAssistant,
+) -> None:
+    """Default hysteresis (0.5) suppresses an update when the setpoint would not change."""
+    calls = async_mock_service(hass, "climate", "set_temperature")
+
+    # external == internal → offset = 0, final = target = 22.0 == current → blocked
+    await setup_blueprint(hass)
+
+    hass.states.async_set(
+        "sensor.external_temp",
+        "22.0",
+        {"unit_of_measurement": "°C", "device_class": "temperature"},
+    )
+    await hass.async_block_till_done()
+
+    assert len(calls) == 0
+
+
 @pytest.mark.parametrize(
     "target,external,internal,current_sp,gain,max_offset,expected",
     [
