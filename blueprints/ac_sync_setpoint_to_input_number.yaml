@@ -1,0 +1,75 @@
+blueprint:
+  name: AC Sync Setpoint to Input Number
+  description: >
+    Sync climate target temperature to an input_number helper.
+    Use one automation per AC so remote/dashboard setpoint changes become
+    the base target used by Follow Me automation.
+  domain: automation
+
+  input:
+    climate_entity:
+      name: Air conditioner
+      selector:
+        entity:
+          domain: climate
+
+    target_helper:
+      name: Target helper (input_number)
+      selector:
+        entity:
+          domain: input_number
+
+    min_change:
+      name: Minimum change to sync (C)
+      default: 0.1
+      selector:
+        number:
+          min: 0.1
+          max: 2
+          step: 0.1
+
+    sync_delay_minutes:
+      name: Stabilization delay (minutes)
+      description: >
+        Wait this long after the last setpoint change before syncing
+        to the input_number helper.
+      default: 5
+      selector:
+        number:
+          min: 0
+          max: 30
+          step: 1
+
+trigger:
+  - platform: state
+    entity_id: !input climate_entity
+    attribute: temperature
+    for:
+      minutes: !input sync_delay_minutes
+
+variables:
+  climate: !input climate_entity
+  helper: !input target_helper
+  min_delta: !input min_change
+  new_temp: >
+    {{ state_attr(climate, 'temperature') | float(0) }}
+  helper_temp: >
+    {{ states(helper) | float(0) }}
+
+condition:
+  - condition: template
+    value_template: >
+      {{ trigger.to_state is not none }}
+
+  - condition: template
+    value_template: >
+      {{ (new_temp - helper_temp) | abs >= min_delta }}
+
+action:
+  - service: input_number.set_value
+    target:
+      entity_id: !input target_helper
+    data:
+      value: "{{ new_temp }}"
+
+mode: restart
