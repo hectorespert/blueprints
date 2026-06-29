@@ -61,6 +61,40 @@ For a complete Follow Me system:
 
 This creates a pipeline: `Remote/Dashboard → Sync → Input Number → Follow Me → AC Adjustment`
 
+---
+
+## Roadmap: v2 Improvements
+
+We are planning significant enhancements to improve stability, user experience, and energy efficiency:
+
+### **Phase 1: Core Stability (v2.0)**
+- [ ] **Hysteresis Anti-Jitter** - Prevent oscillations when temperature fluctuates near setpoint
+- [ ] **Temporal Stabilization** - Wait for sensor reading stability before applying changes
+- [ ] **Multiple External Sensors** - Average temperature from multiple zones/rooms
+- [ ] **Advanced Rate Limiting** - Limit max temperature change per hour (e.g., 3°C/h)
+- [ ] **Robust Data Validation** - Validate all sensor inputs before processing
+- [ ] **Equipment Limits** - Respect min/max temperature constraints of the AC unit
+
+### **Phase 2: Diagnostics & Precision (v2.1)**
+- [ ] **Built-in Diagnostics** - Log last calculation to `input_text` for debugging
+- [ ] **Dynamic Step Rounding** - Auto-detect AC's temperature step precision
+
+### **Implementation Timeline**
+
+| Priority | Phase | Effort | Status |
+|----------|-------|--------|--------|
+| 🔴 High | Core Stability | ~7h | 🔄 In Progress |
+| 🟡 Medium | Diagnostics | ~2h | 📋 Planned |
+
+### **Backward Compatibility**
+
+All v2 improvements will be **optional** with defaults matching v1 behavior:
+- New parameters will have sensible defaults
+- Existing setups will continue to work unchanged
+- No breaking changes to blueprints API
+
+---
+
 ## Tests
 
 Run tests with pip in a local virtual environment:
