@@ -65,6 +65,12 @@ condition:
     value_template: >
       {{ (new_temp - helper_temp) | abs >= min_delta }}
 
+  # Ignore transitions from unavailable/unknown: the AC reports its last stored
+  # value when it comes back online, which is not a user-initiated setpoint change.
+  - condition: template
+    value_template: >
+      {{ trigger.from_state.state not in ['unavailable', 'unknown'] }}
+
   # Only sync changes initiated by the user (physical remote or dashboard).
   # Automation-caused changes (e.g. Follow Me) have parent_id set and no user_id;
   # syncing those would create a feedback loop that drifts the setpoint to extremes.
