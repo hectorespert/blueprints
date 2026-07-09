@@ -266,6 +266,42 @@ async def test_does_not_sync_when_ac_recovers_from_unknown(
 
 
 @pytest.mark.asyncio
+async def test_does_not_sync_when_ac_turns_on_from_off_with_null_temperature(
+    hass: HomeAssistant,
+) -> None:
+    """
+    When the AC is turned on it transitions from 'off' (temperature: null) to
+    an active mode with a temperature. That temperature is the last stored
+    setpoint restored by the AC, not a user-initiated change, so it must not
+    be synced to the input_number helper.
+    """
+    calls = async_mock_service(hass, "input_number", "set_value")
+
+    # Simulate AC being off with no temperature attribute
+    hass.states.async_set("climate.test_ac", "off", {})
+
+    await setup_blueprint(
+        hass,
+        {
+            "climate_entity": "climate.test_ac",
+            "target_helper": "input_number.test_target",
+            "min_change": 0.1,
+            "sync_delay_minutes": 0,
+        },
+    )
+
+    # AC turns on and reports its last stored setpoint
+    hass.states.async_set(
+        "climate.test_ac",
+        "cool",
+        {"temperature": 26.0},
+    )
+    await hass.async_block_till_done()
+
+    assert len(calls) == 0
+
+
+@pytest.mark.asyncio
 async def test_syncs_when_change_has_user_context(
     hass: HomeAssistant,
 ) -> None:

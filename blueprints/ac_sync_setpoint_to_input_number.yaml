@@ -71,6 +71,12 @@ condition:
     value_template: >
       {{ trigger.from_state.state not in ['unavailable', 'unknown'] }}
 
+  # Ignore transitions where the previous temperature was null (e.g. AC was off):
+  # turning the AC on restores the last stored setpoint, which is not a user change.
+  - condition: template
+    value_template: >
+      {{ trigger.from_state.attributes.get('temperature') is not none }}
+
   # Only sync changes initiated by the user (physical remote or dashboard).
   # Automation-caused changes (e.g. Follow Me) have parent_id set and no user_id;
   # syncing those would create a feedback loop that drifts the setpoint to extremes.
