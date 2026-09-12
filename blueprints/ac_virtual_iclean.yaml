@@ -260,7 +260,15 @@ action:
   - if:
       - condition: template
         value_template: >
-          {{ states(climate) in ['cool', 'unavailable', 'unknown'] }}
+          {# Ownership also covers the setpoint: raising it during the freeze
+             is a clear sign the user wants the unit back, even though the
+             mode is still the cool we commanded. The fan mode is deliberately
+             not compared: set_fan_mode carries continue_on_error, so it may
+             never have been applied, and integrations normalise the value. #}
+          {% set setpoint = state_attr(climate, 'temperature')
+                            | float(freeze_temp_val | float) %}
+          {{ states(climate) in ['cool', 'unavailable', 'unknown']
+             and setpoint == freeze_temp_val | float }}
     then:
 
       # Stage 2: thaw. Unit off while the ice melts and drains.

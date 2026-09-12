@@ -107,10 +107,24 @@ condition:
     value_template: >
       {% if trigger.entity_id != climate %}
         true
-      {% elif only_after_cooling_val %}
-        {{ trigger.from_state.state in ['cool', 'dry', 'heat_cool', 'auto'] }}
-      {% else %}
+      {% elif not only_after_cooling_val %}
         {{ trigger.from_state.state != 'fan_only' }}
+      {% else %}
+        {% set previous = trigger.from_state.state %}
+        {% set action = trigger.from_state.attributes.get('hvac_action') %}
+        {% if previous in ['cool', 'dry'] %}
+          {# Unambiguous: the coil got wet, even if the unit was idle at the
+             moment it was switched off. #}
+          true
+        {% elif previous in ['heat_cool', 'auto'] %}
+          {# Ambiguous mode: these can run either way, so fall back to what the
+             unit was actually doing. Only a heating run rules drying out;
+             idle or unreported is treated as worth drying, since a dry coil
+             costs a fan run and a wet one grows mould. #}
+          {{ action != 'heating' }}
+        {% else %}
+          false
+        {% endif %}
       {% endif %}
 
 

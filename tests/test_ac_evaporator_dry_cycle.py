@@ -85,9 +85,14 @@ async def advance(hass: HomeAssistant, freezer, **kwargs) -> None:
     await settle(hass)
 
 
-async def switch_off(hass: HomeAssistant, from_mode: str = "cool") -> None:
+async def switch_off(
+    hass: HomeAssistant, from_mode: str = "cool", hvac_action: str | None = None
+) -> None:
     """Switch the AC off from the given mode, firing the blueprint trigger."""
-    hass.states.async_set("climate.test_ac", from_mode, {"temperature": 22.0})
+    attrs = {"temperature": 22.0}
+    if hvac_action is not None:
+        attrs["hvac_action"] = hvac_action
+    hass.states.async_set("climate.test_ac", from_mode, attrs)
     await settle(hass)
     hass.states.async_set("climate.test_ac", "off", {"temperature": 22.0})
     await settle(hass)
@@ -316,5 +321,41 @@ async def test_does_not_retrigger_on_its_own_switch_off(
     # The unit reports the switch off the cycle just commanded
     hass.states.async_set("climate.test_ac", "off", {})
     await settle(hass)
+
+    assert len(hvac_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_does_not_run_after_heat_cool_spent_heating(
+    hass: HomeAssistant,
+) -> None:
+    """heat_cool runs either way, so the mode alone does not prove cooling."""
+    hvac_calls, _, _ = mock_climate_services(hass)
+
+    await setup_blueprint(hass)
+    await switch_off(hass, from_mode="heat_cool", hvac_action="heating")
+
+    assert len(hvac_calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_runs_after_heat_cool_spent_cooling(hass: HomeAssistant) -> None:
+    hvac_calls, _, _ = mock_climate_services(hass)
+
+    await setup_blueprint(hass)
+    await switch_off(hass, from_mode="heat_cool", hvac_action="cooling")
+
+    assert len(hvac_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_runs_after_cooling_even_when_the_unit_was_idle(
+    hass: HomeAssistant,
+) -> None:
+    """Reaching the setpoint does not dry the coil that cooling already wet."""
+    hvac_calls, _, _ = mock_climate_services(hass)
+
+    await setup_blueprint(hass)
+    await switch_off(hass, from_mode="cool", hvac_action="idle")
 
     assert len(hvac_calls) == 1

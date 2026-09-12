@@ -554,3 +554,22 @@ async def test_re_enables_rival_automations_when_a_climate_command_fails(
     await advance(hass, freezer, minutes=15, seconds=1)
 
     assert len(autos["on"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_stops_when_user_raises_the_freeze_setpoint(
+    hass: HomeAssistant, freezer
+) -> None:
+    """Changing the setpoint claims the unit back without changing the mode."""
+    calls = mock_climate_services(hass)
+
+    await setup_blueprint(hass)
+    await press_button(hass)
+    await report_mode(hass, "cool")
+
+    # User wants it less cold: same hvac mode, different setpoint
+    hass.states.async_set("climate.test_ac", "cool", {"temperature": 23.0})
+    await settle(hass)
+    await advance_freeze(hass, freezer, 12)
+
+    assert len(calls["off"]) == 0
