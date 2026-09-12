@@ -1,0 +1,327 @@
+blueprint:
+  name: AC Virtual iClean
+  description: >
+    Full self-cleaning cycle for indoor units whose manufacturer function is
+    disabled, as happens with Bosch "I clean" on multi-split installations.
+
+    Three stages: freeze the evaporator at the lowest setpoint with a slow fan
+    so dust and grease are trapped in condensate, stop to let it thaw and wash
+    down the drain, then dry the coil with the fan at full speed.
+
+    Limitations worth knowing. Frosting is not guaranteed: the compressor is
+    shared between indoor units and its capacity is split, so the freeze stage
+    is milder than the manufacturer one. The cycle cannot reproduce the
+    high-temperature disinfection stage either, because heating the evaporator
+    is not reachable through climate services. Keep freeze_minutes moderate:
+    a long freeze on a unit with a slow drain can overflow the condensate tray.
+  domain: automation
+
+  input:
+
+    climate_entity:
+      name: Air conditioner
+      description: Indoor unit to clean.
+      selector:
+        entity:
+          domain: climate
+
+    manual_trigger:
+      name: Manual trigger (input_button)
+      description: >
+        Button that starts the cycle. This blueprint is manual only: a deep
+        clean takes the unit out of service for a while and should be a
+        deliberate action.
+      selector:
+        entity:
+          domain: input_button
+
+    other_indoor_units:
+      name: Other indoor units
+      description: >
+        Remaining indoor units sharing the same outdoor unit. The freeze stage
+        imposes cooling mode on the shared outdoor unit, so the cycle refuses
+        to start while another unit is claiming a mode of its own: cooling,
+        heating, dehumidifying or auto. A sibling merely running its fan does
+        not block it. Leave empty on mono-split installations.
+      default: []
+      selector:
+        entity:
+          domain: climate
+          multiple: true
+
+    automations_to_pause:
+      name: Automations to disable during the cycle
+      description: >
+        Automations that would fight the cycle, typically the Follow Me
+        automation for this unit. They are disabled when the cycle starts and
+        re-enabled when it ends, on every path: a normal finish, a freeze cut
+        short by a busy sibling, or you taking over the unit mid-cycle.
+
+        One case is not covered. If Home Assistant restarts while the cycle is
+        running, the sequence never reaches the re-enable step and those
+        automations stay disabled until you switch them back on. They show
+        greyed out in the UI, so it is visible, but it is worth knowing.
+      default: []
+      selector:
+        entity:
+          domain: automation
+          multiple: true
+
+    freeze_temperature:
+      name: Freeze setpoint (C)
+      description: >
+        Setpoint used during the freeze stage. Use the lowest value the unit
+        accepts.
+      default: 16
+      selector:
+        number:
+          min: 16
+          max: 24
+          step: 0.5
+
+    freeze_minutes:
+      name: Freeze time (minutes)
+      default: 12
+      selector:
+        number:
+          min: 1
+          max: 30
+          step: 1
+
+    thaw_minutes:
+      name: Thaw time (minutes)
+      description: >
+        Unit stays off so the condensate melts and drains away.
+      default: 8
+      selector:
+        number:
+          min: 1
+          max: 30
+          step: 1
+
+    dry_minutes:
+      name: Drying time (minutes)
+      default: 15
+      selector:
+        number:
+          min: 1
+          max: 60
+          step: 1
+
+    freeze_fan_mode:
+      name: Fan mode while freezing
+      description: >
+        A slow fan helps the coil get cold. Leave empty to keep the current
+        fan mode.
+      default: low
+      selector:
+        text:
+
+    dry_fan_mode:
+      name: Fan mode while drying
+      description: >
+        A fast fan dries quicker. Leave empty to keep the current fan mode.
+      default: high
+      selector:
+        text:
+
+
+trigger:
+
+  - platform: state
+    entity_id: !input manual_trigger
+
+
+variables:
+
+  climate: !input climate_entity
+  others: !input other_indoor_units
+  paused_automations: !input automations_to_pause
+  freeze_temp_val: !input freeze_temperature
+  freeze_minutes_val: !input freeze_minutes
+  thaw_minutes_val: !input thaw_minutes
+  dry_minutes_val: !input dry_minutes
+  freeze_fan_val: !input freeze_fan_mode
+  dry_fan_val: !input dry_fan_mode
+
+  # Modes in which an indoor unit claims a mode from the shared outdoor unit.
+  # fan_only is absent on purpose: a sibling running its fan alone requests no
+  # refrigerant, so it cannot conflict with the freeze stage, and blocking on
+  # it would let one unit running the dry cycle stall cleaning elsewhere.
+  # dry stays, because dehumidifying runs the compressor.
+  # Unavailable and unknown are not treated as busy either: cloud integrations
+  # drop out often and an offline unit must not block the cycle forever.
+  claiming_modes:
+    - cool
+    - heat
+    - heat_cool
+    - dry
+    - auto
+
+
+condition:
+
+  # Climate must be available
+  - condition: template
+    value_template: >
+      {{ states(climate) not in ['unavailable', 'unknown'] }}
+
+  # Multi-split interlock: the freeze stage forces cooling on the shared
+  # outdoor unit, so every other indoor unit must be idle first.
+  - condition: template
+    value_template: >
+      {{ expand(others)
+         | selectattr('state', 'in', claiming_modes)
+         | list | count == 0 }}
+
+
+action:
+
+  # Silence whatever else drives this AC before touching it. The freeze stage
+  # sets a deliberate setpoint that a Follow Me automation would overwrite on
+  # its next trigger.
+  #
+  # Every climate command below carries continue_on_error, so a unit that
+  # rejects a mode or an integration that times out degrades the cycle instead
+  # of aborting the script and stranding those automations disabled.
+  - if:
+      - condition: template
+        value_template: "{{ paused_automations | count > 0 }}"
+    then:
+      - service: automation.turn_off
+        target:
+          entity_id: !input automations_to_pause
+        data:
+          # Cut short any correction already in flight.
+          stop_actions: true
+
+  # Stage 1: freeze. Lowest setpoint with a slow fan.
+  - service: climate.set_hvac_mode
+    continue_on_error: true
+    target:
+      entity_id: !input climate_entity
+    data:
+      hvac_mode: cool
+
+  - service: climate.set_temperature
+    continue_on_error: true
+    target:
+      entity_id: !input climate_entity
+    data:
+      temperature: "{{ freeze_temp_val | float }}"
+
+  - if:
+      - condition: template
+        value_template: "{{ freeze_fan_val | trim != '' }}"
+    then:
+      - service: climate.set_fan_mode
+        continue_on_error: true
+        target:
+          entity_id: !input climate_entity
+        data:
+          fan_mode: "{{ freeze_fan_val }}"
+
+  # Each stage waits out its time and then checks whether the unit is still the
+  # one it left behind before moving on. Ownership is checked at the stage
+  # boundary rather than watched continuously: a service call does not update
+  # the entity state instantly, so watching for a deviation would race against
+  # the integration reporting our own command back. No command is issued inside
+  # a stage, so a user taking over is respected from that moment either way.
+  # Unavailable counts as ours: a cloud integration dropping out is not a user.
+  # Stages nest in if/then rather than sitting behind condition: steps, so an
+  # interrupted cycle unwinds instead of leaving the unit stuck in cooling.
+  #
+  # The freeze is the exception: it is the only stage actively commanding a
+  # mode from the shared outdoor unit, so it re-checks its siblings once a
+  # minute instead of waiting the whole time blind. If another indoor unit
+  # claims a mode meanwhile, the freeze is cut short and the cycle carries on
+  # to thaw and dry: the coil already holds some condensate, and stage 2
+  # switches the unit off, which withdraws the conflicting demand anyway.
+  - repeat:
+      sequence:
+        - delay:
+            seconds: 60
+      while:
+        - condition: template
+          value_template: >
+            {{ repeat.index <= freeze_minutes_val | int }}
+        # Only the siblings are re-checked here. Whether this unit is still
+        # ours cannot be tested at the top of the loop: the first check runs
+        # milliseconds after the set_hvac_mode call, long before a cloud
+        # integration reports the commanded mode back, so it would read the
+        # old state and break the loop immediately. That check stays at the
+        # end of the stage, where the state has settled.
+        - condition: template
+          value_template: >
+            {{ expand(others)
+               | selectattr('state', 'in', claiming_modes)
+               | list | count == 0 }}
+
+  - if:
+      - condition: template
+        value_template: >
+          {{ states(climate) in ['cool', 'unavailable', 'unknown'] }}
+    then:
+
+      # Stage 2: thaw. Unit off while the ice melts and drains.
+      - service: climate.turn_off
+        continue_on_error: true
+        target:
+          entity_id: !input climate_entity
+
+      - delay:
+          seconds: "{{ thaw_minutes_val | int * 60 }}"
+
+      - if:
+          - condition: template
+            value_template: >
+              {{ states(climate) in ['off', 'unavailable', 'unknown'] }}
+        then:
+
+          # Stage 3: dry. Fan at full speed to leave the coil dry.
+          - service: climate.set_hvac_mode
+            continue_on_error: true
+            target:
+              entity_id: !input climate_entity
+            data:
+              hvac_mode: fan_only
+
+          - if:
+              - condition: template
+                value_template: "{{ dry_fan_val | trim != '' }}"
+            then:
+              - service: climate.set_fan_mode
+                continue_on_error: true
+                target:
+                  entity_id: !input climate_entity
+                data:
+                  fan_mode: "{{ dry_fan_val }}"
+
+          - delay:
+              seconds: "{{ dry_minutes_val | int * 60 }}"
+
+          # Leave the unit off, like the manufacturer cycle does.
+          - if:
+              - condition: template
+                value_template: >
+                  {{ states(climate) in ['fan_only', 'unavailable', 'unknown'] }}
+            then:
+              - service: climate.turn_off
+                continue_on_error: true
+                target:
+                  entity_id: !input climate_entity
+
+  # Sits at the top level of the sequence, outside every nested if, so it runs
+  # on all in-cycle paths: normal finish, freeze cut short by a busy sibling,
+  # or the user taking over at any stage boundary.
+  - if:
+      - condition: template
+        value_template: "{{ paused_automations | count > 0 }}"
+    then:
+      - service: automation.turn_on
+        target:
+          entity_id: !input automations_to_pause
+
+
+mode: single
+max_exceeded: silent
