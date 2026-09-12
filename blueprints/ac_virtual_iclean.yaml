@@ -57,6 +57,10 @@ blueprint:
         re-enabled when it ends, on every path: a normal finish, a freeze cut
         short by a busy sibling, or you taking over the unit mid-cycle.
 
+        Only the ones that were actually enabled when the cycle started are
+        re-enabled: one already disabled beforehand is left alone, so this
+        does not fight a choice you had already made.
+
         One case is not covered. If Home Assistant restarts while the cycle is
         running, the sequence never reaches the re-enable step and those
         automations stay disabled until you switch them back on. They show
@@ -137,6 +141,15 @@ variables:
   climate: !input climate_entity
   others: !input other_indoor_units
   paused_automations: !input automations_to_pause
+  # Only automations that were enabled when the cycle started are restored.
+  # Without this, turn_on at the end would revive one the user had already
+  # disabled beforehand. A mid-cycle disable is not distinguishable from this:
+  # our own turn_off already leaves the entity 'off', so there is no state to
+  # tell the two apart, and restoring it matches what the user asked for when
+  # they pressed the button.
+  automations_originally_on: >
+    {{ expand(paused_automations) | selectattr('state', 'eq', 'on')
+       | map(attribute='entity_id') | list }}
   freeze_temp_val: !input freeze_temperature
   freeze_minutes_val: !input freeze_minutes
   thaw_minutes_val: !input thaw_minutes
@@ -264,11 +277,24 @@ action:
              is a clear sign the user wants the unit back, even though the
              mode is still the cool we commanded. The fan mode is deliberately
              not compared: set_fan_mode carries continue_on_error, so it may
-             never have been applied, and integrations normalise the value. #}
-          {% set setpoint = state_attr(climate, 'temperature')
-                            | float(freeze_temp_val | float) %}
-          {{ states(climate) in ['cool', 'unavailable', 'unknown']
-             and setpoint == freeze_temp_val | float }}
+             never have been applied, and integrations normalise the value.
+
+             unavailable/unknown skip the setpoint check entirely: there is no
+             reliable attribute to compare against, and a cloud integration
+             dropping out is not a user. For 'cool', -1 is used as the default
+             so a missing temperature attribute reads as unverified rather
+             than trivially matching the freeze setpoint, which would hide a
+             rejected or never-applied set_temperature call. -1 is outside the
+             16-30 range every unit in this blueprint accepts, so it can never
+             equal freeze_temp_val by coincidence. #}
+          {% if states(climate) in ['unavailable', 'unknown'] %}
+            true
+          {% elif states(climate) == 'cool' %}
+            {{ state_attr(climate, 'temperature') | float(-1)
+               == freeze_temp_val | float }}
+          {% else %}
+            false
+          {% endif %}
     then:
 
       # Stage 2: thaw. Unit off while the ice melts and drains.
@@ -324,11 +350,11 @@ action:
   # or the user taking over at any stage boundary.
   - if:
       - condition: template
-        value_template: "{{ paused_automations | count > 0 }}"
+        value_template: "{{ automations_originally_on | count > 0 }}"
     then:
       - service: automation.turn_on
         target:
-          entity_id: !input automations_to_pause
+          entity_id: "{{ automations_originally_on }}"
 
 
 mode: single

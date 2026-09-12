@@ -63,6 +63,9 @@ def setup_entities(hass: HomeAssistant) -> None:
     hass.states.async_set("climate.other_1", "off", {})
     hass.states.async_set("climate.other_2", "off", {})
     hass.states.async_set("input_button.test_clean", dt_util.utcnow().isoformat())
+    # Enabled by default, like a real automation would be before the cycle
+    # ever runs. Tests that need the "already disabled" case override this.
+    hass.states.async_set("automation.follow_me_test_ac", "on")
 
 
 def mock_climate_services(hass: HomeAssistant) -> dict:
@@ -570,6 +573,56 @@ async def test_stops_when_user_raises_the_freeze_setpoint(
     # User wants it less cold: same hvac mode, different setpoint
     hass.states.async_set("climate.test_ac", "cool", {"temperature": 23.0})
     await settle(hass)
+    await advance_freeze(hass, freezer, 12)
+
+    assert len(calls["off"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_does_not_enable_an_automation_disabled_before_the_cycle(
+    hass: HomeAssistant, freezer
+) -> None:
+    """Restoring every configured automation would fight the user's own choice.
+
+    If Follow Me was already off before the button was pressed, iClean must
+    not be the one that turns it back on.
+    """
+    calls = mock_climate_services(hass)
+
+    hass.states.async_set("automation.follow_me_test_ac", "off")
+
+    await setup_blueprint(hass)
+    autos = mock_automation_services(hass)
+    await press_button(hass)
+
+    await report_mode(hass, "cool")
+    await advance_freeze(hass, freezer, 12)
+    await report_mode(hass, "off")
+    await advance(hass, freezer, minutes=8, seconds=1)
+    await report_mode(hass, "fan_only")
+    await advance(hass, freezer, minutes=15, seconds=1)
+
+    assert len(calls["off"]) == 2
+    assert len(autos["on"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_stops_when_the_temperature_attribute_goes_missing_during_freeze(
+    hass: HomeAssistant, freezer
+) -> None:
+    """A missing temperature attribute must not trivially pass ownership.
+
+    Without a safe default, state_attr(...).float(default) would substitute
+    the freeze setpoint itself, hiding a rejected or never-applied
+    set_temperature call behind a check that always agrees with itself.
+    """
+    calls = mock_climate_services(hass)
+
+    await setup_blueprint(hass)
+    await press_button(hass)
+
+    # The integration reports cool but never exposes a temperature attribute
+    hass.states.async_set("climate.test_ac", "cool", {})
     await advance_freeze(hass, freezer, 12)
 
     assert len(calls["off"]) == 0
