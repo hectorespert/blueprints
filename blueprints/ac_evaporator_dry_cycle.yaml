@@ -1,0 +1,172 @@
+blueprint:
+  name: AC Evaporator Dry Cycle
+  description: >
+    Dries the indoor unit evaporator with the fan after the AC is switched off,
+    to prevent mould and stale smells.
+
+    This emulates the drying stage of the manufacturer self-cleaning function
+    (Bosch "I clean" and equivalents), which is disabled by the manufacturer on
+    multi-split installations.
+
+    The cycle only uses fan_only and off. That runs the indoor fan alone: no
+    refrigerant is requested, the shared outdoor unit is not started and no
+    mode is imposed on it, so the cycle is safe to run on a multi-split while
+    other rooms are cooling or heating. It does not fight a Follow Me
+    automation either, which ignores fan_only and off.
+  domain: automation
+
+  input:
+
+    climate_entity:
+      name: Air conditioner
+      description: Indoor unit whose evaporator is dried.
+      selector:
+        entity:
+          domain: climate
+
+    manual_trigger:
+      name: Manual trigger (input_button)
+      description: >
+        Optional button to start the cycle on demand.
+        Leave empty to only run the cycle when the AC is switched off.
+      default: []
+      selector:
+        entity:
+          domain: input_button
+
+    dry_minutes:
+      name: Drying time (minutes)
+      description: >
+        How long the fan runs to dry the evaporator.
+      default: 15
+      selector:
+        number:
+          min: 1
+          max: 60
+          step: 1
+
+    fan_mode:
+      name: Fan mode while drying
+      description: >
+        Fan speed used during the cycle. A high speed dries faster.
+        Leave empty to keep the current fan mode.
+      default: high
+      selector:
+        text:
+
+    only_after_cooling:
+      name: Only after cooling
+      description: >
+        Run the cycle only when the AC was cooling or dehumidifying before
+        being switched off. There is no condensate to dry after heating.
+      default: true
+      selector:
+        boolean:
+
+
+trigger:
+
+  - platform: state
+    entity_id: !input climate_entity
+    to: "off"
+
+  - platform: state
+    entity_id: !input manual_trigger
+
+
+variables:
+
+  climate: !input climate_entity
+  dry_minutes_val: !input dry_minutes
+  fan_mode_val: !input fan_mode
+  only_after_cooling_val: !input only_after_cooling
+
+
+condition:
+
+  # Climate must be available
+  - condition: template
+    value_template: >
+      {{ states(climate) not in ['unavailable', 'unknown'] }}
+
+  # Ignore transitions out of unavailable/unknown: an entity reporting its
+  # stored value when it comes back online is not a real event. This covers the
+  # AC coming back after a dropout and the button restoring state on restart.
+  - condition: template
+    value_template: >
+      {{ trigger.from_state is not none and
+         trigger.from_state.state not in ['unavailable', 'unknown'] }}
+
+  # Which previous modes are worth drying. Manual runs are always allowed: the
+  # user asked for them explicitly.
+  #
+  # fan_only is excluded in every case, because the cycle ends by switching the
+  # unit off from fan_only: without this the automation would retrigger on its
+  # own last action and dry the unit again, forever.
+  - condition: template
+    value_template: >
+      {% if trigger.entity_id != climate %}
+        true
+      {% elif not only_after_cooling_val %}
+        {{ trigger.from_state.state != 'fan_only' }}
+      {% else %}
+        {% set previous = trigger.from_state.state %}
+        {% set action = trigger.from_state.attributes.get('hvac_action') %}
+        {% if previous in ['cool', 'dry'] %}
+          {# Unambiguous: the coil got wet, even if the unit was idle at the
+             moment it was switched off. #}
+          true
+        {% elif previous in ['heat_cool', 'auto'] %}
+          {# Ambiguous mode: these can run either way, so fall back to what the
+             unit was actually doing. Only a heating run rules drying out;
+             idle or unreported is treated as worth drying, since a dry coil
+             costs a fan run and a wet one grows mould. #}
+          {{ action != 'heating' }}
+        {% else %}
+          false
+        {% endif %}
+      {% endif %}
+
+
+action:
+
+  - service: climate.set_hvac_mode
+    target:
+      entity_id: !input climate_entity
+    data:
+      hvac_mode: fan_only
+
+  # Not every unit exposes the configured fan mode; a rejected speed must not
+  # abort the cycle, the evaporator still gets dried at the default speed.
+  - if:
+      - condition: template
+        value_template: "{{ fan_mode_val | trim != '' }}"
+    then:
+      - service: climate.set_fan_mode
+        continue_on_error: true
+        target:
+          entity_id: !input climate_entity
+        data:
+          fan_mode: "{{ fan_mode_val }}"
+
+  - delay:
+      seconds: "{{ dry_minutes_val | int * 60 }}"
+
+  # Leave the unit off, like the manufacturer cycle does, but only if it is
+  # still the one we left drying. Ownership is checked at the end of the stage
+  # rather than watched continuously: a service call does not update the entity
+  # state instantly, so watching for a deviation would race against the
+  # integration reporting our own command back. No command is issued while
+  # drying anyway, so a user taking over is respected either way.
+  # Unavailable counts as ours: a cloud integration dropping out is not a user.
+  - if:
+      - condition: template
+        value_template: >
+          {{ states(climate) in ['fan_only', 'unavailable', 'unknown'] }}
+    then:
+      - service: climate.turn_off
+        target:
+          entity_id: !input climate_entity
+
+
+mode: restart
