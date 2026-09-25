@@ -216,6 +216,14 @@ action:
     data:
       hvac_mode: cool
 
+  # Give the unit a moment to settle into the new mode before sending the
+  # setpoint. On at least one real installation (Midea-based Climate 3000i),
+  # a set_temperature that arrives while the mode switch is still being
+  # processed gets silently dropped, leaving the unit at its previous
+  # setpoint instead of the freeze temperature.
+  - delay:
+      seconds: 3
+
   - service: climate.set_temperature
     continue_on_error: true
     target:
