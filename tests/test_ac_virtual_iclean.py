@@ -89,9 +89,20 @@ async def settle(hass: HomeAssistant) -> None:
         await asyncio.sleep(0)
 
 
-async def press_button(hass: HomeAssistant) -> None:
+async def press_button(hass: HomeAssistant, freezer=None) -> None:
+    """Press the manual trigger button.
+
+    Passing freezer also advances the clock past the freeze stage's settle
+    delay (see the blueprint), so callers that go on to check the freeze
+    setpoint/fan calls, or count freeze-loop iterations with advance_freeze,
+    see the same timing as before that delay existed. Tests that abort
+    before the freeze stage (a failed condition) or only check the immediate
+    hvac_mode call do not need it.
+    """
     hass.states.async_set("input_button.test_clean", dt_util.utcnow().isoformat())
     await settle(hass)
+    if freezer is not None:
+        await advance(hass, freezer, seconds=5)
 
 
 async def report_mode(hass: HomeAssistant, mode: str) -> None:
@@ -124,7 +135,7 @@ async def test_runs_the_three_stages_and_leaves_the_unit_off(
     calls = mock_climate_services(hass)
 
     await setup_blueprint(hass)
-    await press_button(hass)
+    await press_button(hass, freezer)
 
     # Stage 1: freeze
     assert len(calls["hvac"]) == 1
@@ -158,6 +169,33 @@ async def test_runs_the_three_stages_and_leaves_the_unit_off(
     # The unit is left off, like the manufacturer cycle does
     await advance(hass, freezer, minutes=1, seconds=1)
     assert len(calls["off"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_waits_before_sending_the_freeze_setpoint(
+    hass: HomeAssistant, freezer
+) -> None:
+    """The setpoint is held back until the mode change has had time to settle.
+
+    Some local integrations (Midea-based units, like the real Climate 3000i
+    this blueprint targets) silently drop a set_temperature that arrives
+    while the mode switch is still being processed.
+    """
+    calls = mock_climate_services(hass)
+
+    await setup_blueprint(hass)
+    hass.states.async_set("input_button.test_clean", dt_util.utcnow().isoformat())
+    await settle(hass)
+
+    assert len(calls["hvac"]) == 1
+    assert len(calls["temp"]) == 0
+    assert len(calls["fan"]) == 0
+
+    await advance(hass, freezer, seconds=3)
+
+    assert len(calls["temp"]) == 1
+    assert calls["temp"][0].data["temperature"] == 16.0
+    assert len(calls["fan"]) == 1
 
 
 @pytest.mark.asyncio
@@ -210,7 +248,7 @@ async def test_stops_when_user_takes_over_during_freeze(
     calls = mock_climate_services(hass)
 
     await setup_blueprint(hass)
-    await press_button(hass)
+    await press_button(hass, freezer)
     await report_mode(hass, "cool")
 
     # User switches the unit to heating mid-freeze
@@ -229,7 +267,7 @@ async def test_stops_when_user_takes_over_during_thaw(
     calls = mock_climate_services(hass)
 
     await setup_blueprint(hass)
-    await press_button(hass)
+    await press_button(hass, freezer)
     await report_mode(hass, "cool")
     await advance_freeze(hass, freezer, 12)
     assert len(calls["off"]) == 1
@@ -249,7 +287,7 @@ async def test_stops_when_user_takes_over_during_dry(
     calls = mock_climate_services(hass)
 
     await setup_blueprint(hass)
-    await press_button(hass)
+    await press_button(hass, freezer)
     await report_mode(hass, "cool")
     await advance_freeze(hass, freezer, 12)
     await report_mode(hass, "off")
@@ -272,22 +310,24 @@ async def test_second_press_while_running_is_ignored(
     calls = mock_climate_services(hass)
 
     await setup_blueprint(hass)
-    await press_button(hass)
+    await press_button(hass, freezer)
     await report_mode(hass, "cool")
 
     await advance_freeze(hass, freezer, 5)
-    await press_button(hass)
+    await press_button(hass, freezer)
 
     assert len(calls["hvac"]) == 1
     assert len(calls["temp"]) == 1
 
 
 @pytest.mark.asyncio
-async def test_uses_configured_freeze_temperature(hass: HomeAssistant) -> None:
+async def test_uses_configured_freeze_temperature(
+    hass: HomeAssistant, freezer
+) -> None:
     calls = mock_climate_services(hass)
 
     await setup_blueprint(hass, {**DEFAULT_INPUT, "freeze_temperature": 17.5})
-    await press_button(hass)
+    await press_button(hass, freezer)
 
     assert calls["temp"][0].data["temperature"] == 17.5
 
@@ -301,7 +341,7 @@ async def test_keeps_current_fan_mode_when_fan_modes_are_empty(
     await setup_blueprint(
         hass, {**DEFAULT_INPUT, "freeze_fan_mode": "", "dry_fan_mode": ""}
     )
-    await press_button(hass)
+    await press_button(hass, freezer)
     assert len(calls["fan"]) == 0
 
     await report_mode(hass, "cool")
@@ -325,7 +365,7 @@ async def test_minimal_configuration(hass: HomeAssistant, freezer) -> None:
             "manual_trigger": "input_button.test_clean",
         },
     )
-    await press_button(hass)
+    await press_button(hass, freezer)
 
     assert calls["hvac"][0].data["hvac_mode"] == "cool"
     assert calls["temp"][0].data["temperature"] == 16.0
@@ -388,7 +428,7 @@ async def test_cuts_the_freeze_short_when_a_sibling_claims_a_mode(
     calls = mock_climate_services(hass)
 
     await setup_blueprint(hass)
-    await press_button(hass)
+    await press_button(hass, freezer)
     await report_mode(hass, "cool")
 
     await advance_freeze(hass, freezer, 3)
@@ -427,7 +467,7 @@ async def test_disables_rival_automations_and_re_enables_them_at_the_end(
     calls = mock_climate_services(hass)
     await setup_blueprint(hass)
     autos = mock_automation_services(hass)
-    await press_button(hass)
+    await press_button(hass, freezer)
 
     # Silenced before the AC is touched at all
     assert len(autos["off"]) == 1
@@ -456,7 +496,7 @@ async def test_re_enables_rival_automations_when_user_takes_over(
 
     await setup_blueprint(hass)
     autos = mock_automation_services(hass)
-    await press_button(hass)
+    await press_button(hass, freezer)
     await report_mode(hass, "cool")
 
     # User switches the unit to heating mid-freeze
@@ -474,7 +514,7 @@ async def test_re_enables_rival_automations_when_freeze_is_cut_short(
 
     await setup_blueprint(hass)
     autos = mock_automation_services(hass)
-    await press_button(hass)
+    await press_button(hass, freezer)
     await report_mode(hass, "cool")
     await advance_freeze(hass, freezer, 3)
 
@@ -546,7 +586,7 @@ async def test_re_enables_rival_automations_when_a_climate_command_fails(
 
     await setup_blueprint(hass)
     autos = mock_automation_services(hass)
-    await press_button(hass)
+    await press_button(hass, freezer)
 
     assert len(autos["off"]) == 1
 
@@ -567,7 +607,7 @@ async def test_stops_when_user_raises_the_freeze_setpoint(
     calls = mock_climate_services(hass)
 
     await setup_blueprint(hass)
-    await press_button(hass)
+    await press_button(hass, freezer)
     await report_mode(hass, "cool")
 
     # User wants it less cold: same hvac mode, different setpoint
@@ -593,7 +633,7 @@ async def test_does_not_enable_an_automation_disabled_before_the_cycle(
 
     await setup_blueprint(hass)
     autos = mock_automation_services(hass)
-    await press_button(hass)
+    await press_button(hass, freezer)
 
     await report_mode(hass, "cool")
     await advance_freeze(hass, freezer, 12)
@@ -619,7 +659,7 @@ async def test_stops_when_the_temperature_attribute_goes_missing_during_freeze(
     calls = mock_climate_services(hass)
 
     await setup_blueprint(hass)
-    await press_button(hass)
+    await press_button(hass, freezer)
 
     # The integration reports cool but never exposes a temperature attribute
     hass.states.async_set("climate.test_ac", "cool", {})
