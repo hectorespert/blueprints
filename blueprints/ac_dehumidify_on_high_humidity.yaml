@@ -1,0 +1,241 @@
+blueprint:
+  name: AC Dehumidify on High Humidity
+  description: >
+    Dehumidifies a room with the AC when humidity gets too high during a time
+    window, typically at night, and switches the AC off again once the air is
+    dry enough.
+
+    The AC is started only when it is off, so a unit already cooling or heating
+    is never taken over. It is switched off only when it is in dry mode, either
+    because humidity dropped below the stop threshold or the room cooled down
+    below the minimum temperature (at any time of day), or because the window
+    ended.
+
+    Conditions are also checked when Home Assistant starts, so a restart
+    during the window does not leave a humid room untreated.
+
+    The gap between the start and stop thresholds is a hysteresis band: the AC
+    keeps dehumidifying until humidity is clearly lower, instead of toggling on
+    and off around a single value.
+  domain: automation
+
+  input:
+
+    humidity_sensor:
+      name: Humidity sensor
+      description: Sensor measuring the relative humidity of the room.
+      selector:
+        entity:
+          domain: sensor
+          device_class: humidity
+
+    climate_entity:
+      name: Air conditioner
+      description: Unit used to dehumidify the room.
+      selector:
+        entity:
+          domain: climate
+
+    start_humidity:
+      name: Start above (%)
+      description: Dehumidifying starts when humidity rises above this value.
+      default: 70
+      selector:
+        number:
+          min: 30
+          max: 100
+          step: 1
+          unit_of_measurement: "%"
+
+    stop_humidity:
+      name: Stop below (%)
+      description: >
+        Dehumidifying stops when humidity drops below this value.
+        Keep it lower than the start threshold.
+      default: 60
+      selector:
+        number:
+          min: 20
+          max: 100
+          step: 1
+          unit_of_measurement: "%"
+
+    temperature_sensor:
+      name: Temperature sensor
+      description: >
+        Optional sensor measuring the room temperature.
+        Leave empty to use the temperature reported by the AC.
+      default: []
+      selector:
+        entity:
+          domain: sensor
+          device_class: temperature
+
+    min_temperature:
+      name: Minimum temperature
+      description: >
+        Dry mode cools the room. Dehumidifying does not start below this
+        temperature, and is stopped if the room cools down below it.
+      default: 18
+      selector:
+        number:
+          min: 10
+          max: 30
+          step: 0.5
+          unit_of_measurement: "°C"
+
+    window_start:
+      name: Window start
+      description: >
+        Dehumidifying may only start from this time on. The window may cross
+        midnight, e.g. 22:00 to 06:00.
+      default: "00:00:00"
+      selector:
+        time:
+
+    window_end:
+      name: Window end
+      description: >
+        Time at which the window ends. An AC still in dry mode is switched off.
+      default: "08:00:00"
+      selector:
+        time:
+
+    dehumidify_actions:
+      name: Dehumidify actions
+      description: >
+        Actions that start dehumidifying. By default the AC is set to dry mode.
+        Replace them to run a script instead, e.g. one that also sets the fan
+        speed or the setpoint.
+      default:
+        - service: climate.set_hvac_mode
+          target:
+            entity_id: "{{ climate }}"
+          data:
+            hvac_mode: dry
+      selector:
+        action:
+
+
+trigger_variables:
+
+  # Available to the triggers, the conditions and the default dehumidify actions
+  climate: !input climate_entity
+  temperature_sensor: !input temperature_sensor
+  min_temperature: !input min_temperature
+
+
+trigger:
+
+  - platform: numeric_state
+    entity_id: !input humidity_sensor
+    above: !input start_humidity
+    id: humidity_high
+
+  - platform: numeric_state
+    entity_id: !input humidity_sensor
+    below: !input stop_humidity
+    id: humidity_low
+
+  - platform: time
+    at: !input window_start
+    id: window_start
+
+  - platform: time
+    at: !input window_end
+    id: window_end
+
+  - platform: homeassistant
+    event: start
+    id: ha_start
+
+  # Dry mode cools the room. Fires when the temperature falls below the
+  # minimum, from the dedicated sensor or else from the AC's own reading.
+  - platform: template
+    value_template: >
+      {% set t = states(temperature_sensor) if temperature_sensor
+                 else state_attr(climate, 'current_temperature') %}
+      {{ t | is_number and t | float < min_temperature | float }}
+    id: too_cold
+
+
+variables:
+
+  humidity_sensor: !input humidity_sensor
+
+
+action:
+
+  - choose:
+
+      # Start dehumidifying. Three triggers lead here:
+      # - humidity_high: humidity crossed the start threshold.
+      # - window_start: the numeric_state trigger only fires when the threshold
+      #   is crossed, so without this a room that became humid during the day
+      #   would never be dehumidified.
+      # - ha_start: Home Assistant may have missed either of the above while it
+      #   was down.
+      - conditions:
+          - condition: trigger
+            id:
+              - humidity_high
+              - window_start
+              - ha_start
+        sequence:
+
+          # Integrations may still be loading at startup, so wait for both
+          # entities to report a state before deciding.
+          - if:
+              - condition: trigger
+                id: ha_start
+            then:
+              - wait_template: >
+                  {{ states(humidity_sensor) not in ['unavailable', 'unknown'] and
+                     states(climate) not in ['unavailable', 'unknown'] }}
+                timeout: "00:05:00"
+                continue_on_timeout: false
+
+          - condition: time
+            after: !input window_start
+            before: !input window_end
+
+          - condition: numeric_state
+            entity_id: !input humidity_sensor
+            above: !input start_humidity
+
+          - condition: state
+            entity_id: !input climate_entity
+            state: "off"
+
+          # Too cold to cool the room further. A missing reading does not block
+          # dehumidifying: the window end still bounds how long the AC runs.
+          - condition: template
+            value_template: >
+              {% set t = states(temperature_sensor) if temperature_sensor
+                         else state_attr(climate, 'current_temperature') %}
+              {{ not t | is_number or t | float >= min_temperature | float }}
+
+          - sequence: !input dehumidify_actions
+
+      # The air is dry enough, the room got too cold, or the window ended. Only
+      # dry mode is switched off: any other mode means somebody else is using
+      # the AC.
+      - conditions:
+          - condition: trigger
+            id:
+              - humidity_low
+              - too_cold
+              - window_end
+          - condition: state
+            entity_id: !input climate_entity
+            state: dry
+        sequence:
+          - service: climate.set_hvac_mode
+            target:
+              entity_id: !input climate_entity
+            data:
+              hvac_mode: "off"
+
+
+mode: single
+max_exceeded: silent

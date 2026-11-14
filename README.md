@@ -145,6 +145,42 @@ Or manually: copy it to `<config>/blueprints/automation/hectorespert/ac_virtual_
 
 ---
 
+### 5. AC Dehumidify on High Humidity
+
+Puts the AC in dry mode when humidity rises above a threshold during a time
+window, and switches it off once the air is dry enough or the window ends.
+
+**Use case:** dehumidifying a living room overnight without leaving the AC
+running all night, and without fighting someone who is using it.
+
+**Features:**
+- Start and stop thresholds (70 % and 60 % by default) form a hysteresis band,
+  so the AC does not toggle around a single value
+- Time window (00:00 to 08:00 by default), which may cross midnight
+- If the room is already humid when the window opens, dehumidifying starts
+  right away instead of waiting for the threshold to be crossed again
+- Re-checks on Home Assistant startup, so a restart during the window is not
+  missed. It waits up to 5 minutes for the sensor and the AC to finish loading
+- Minimum temperature (18 °C by default): dry mode cools the room, so it does
+  not start below it and stops if the room cools down below it. Uses a
+  dedicated temperature sensor if given, or the AC's own reading. A missing
+  reading does not block dehumidifying
+- Only starts an AC that is off, and only switches off an AC in dry mode: a
+  unit cooling or heating is left alone
+- The stop threshold and the minimum temperature apply at any time of day, so
+  a dry run that outlives the window still ends when the air is dry or the
+  room gets cold
+- Replaceable dehumidify actions: by default the AC is set to dry mode, but
+  you can run a script instead, e.g. one that also sets the fan speed
+
+**Installation:**
+
+[![Open your Home Assistant instance and show the blueprint import dialog with a specific blueprint pre-filled.](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fraw.githubusercontent.com%2Fhectorespert%2Fblueprints%2Fmain%2Fblueprints%2Fac_dehumidify_on_high_humidity.yaml)
+
+Or manually: copy it to `<config>/blueprints/automation/hectorespert/ac_dehumidify_on_high_humidity.yaml`
+
+---
+
 ## Recommended Setup
 
 For a complete Follow Me system:
