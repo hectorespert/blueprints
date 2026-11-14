@@ -1,4 +1,6 @@
-pytest>=8.0
-pytest-asyncio>=1.4.0
+# pytest-homeassistant-custom-component pins exact versions of homeassistant,
+# pytest and pytest-asyncio, and installs them. Do not list those here: any
+# version other than the pinned one cannot be resolved, so bumping them on
+# their own only produces Dependabot PRs that can never pass. Bumping this
+# package moves all of them together.
 pytest-homeassistant-custom-component>=0.13.375
-homeassistant>=2026.9.3
