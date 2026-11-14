@@ -170,8 +170,9 @@ running all night, and without fighting someone who is using it.
 - The stop threshold and the minimum temperature apply at any time of day, so
   a dry run that outlives the window still ends when the air is dry or the
   room gets cold
-- Replaceable dehumidify actions: by default the AC is set to dry mode, but
-  you can run a script instead, e.g. one that also sets the fan speed
+- Optional fan mode for dry mode, e.g. a low or silent speed at night. It is
+  sent 3 seconds after the mode change, since some units drop commands that
+  arrive while they are still switching mode
 
 **Installation:**
 

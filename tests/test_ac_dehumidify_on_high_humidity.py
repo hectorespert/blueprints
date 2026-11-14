@@ -330,24 +330,68 @@ async def test_follows_latest_humidity_across_a_night(
 
 
 @pytest.mark.asyncio
-async def test_runs_custom_dehumidify_actions_instead_of_dry_mode(
+async def test_sets_fan_mode_once_dry_mode_has_settled(
+    hass: HomeAssistant, freezer
+) -> None:
+    """Some units drop a command that arrives while they are switching mode."""
+    freezer.move_to(local_time(3))
+    hvac_calls = async_mock_service(hass, "climate", "set_hvac_mode")
+    fan_calls = async_mock_service(hass, "climate", "set_fan_mode")
+
+    await setup_blueprint(hass, {**DEFAULT_INPUT, "fan_mode": "low"})
+    set_humidity_state(hass, 75)
+    await settle(hass)
+
+    assert [c.data["hvac_mode"] for c in hvac_calls] == ["dry"]
+    assert len(fan_calls) == 0
+
+    when = local_time(3, 0, 3)
+    freezer.move_to(when)
+    async_fire_time_changed(hass, when)
+    await settle(hass)
+
+    assert len(fan_calls) == 1
+    assert fan_calls[0].data["fan_mode"] == "low"
+    assert fan_calls[0].data["entity_id"] == ["climate.test_ac"]
+
+
+@pytest.mark.asyncio
+async def test_keeps_current_fan_mode_by_default(
     hass: HomeAssistant, freezer
 ) -> None:
     freezer.move_to(local_time(3))
     hvac_calls = async_mock_service(hass, "climate", "set_hvac_mode")
-    script_calls = async_mock_service(hass, "script", "test_dehumidify")
+    fan_calls = async_mock_service(hass, "climate", "set_fan_mode")
 
-    await setup_blueprint(
-        hass,
-        {
-            **DEFAULT_INPUT,
-            "dehumidify_actions": [{"service": "script.test_dehumidify"}],
-        },
-    )
-    await set_humidity(hass, 75)
+    await setup_blueprint(hass)
+    set_humidity_state(hass, 75)
+    await settle(hass)
 
-    assert len(script_calls) == 1
-    assert len(hvac_calls) == 0
+    # Past the point where a configured fan mode would have been sent
+    when = local_time(3, 0, 3)
+    freezer.move_to(when)
+    async_fire_time_changed(hass, when)
+    await settle(hass)
+
+    assert [c.data["hvac_mode"] for c in hvac_calls] == ["dry"]
+    assert len(fan_calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_does_not_set_fan_mode_when_switching_off(
+    hass: HomeAssistant, freezer
+) -> None:
+    freezer.move_to(local_time(3))
+    hvac_calls = async_mock_service(hass, "climate", "set_hvac_mode")
+    fan_calls = async_mock_service(hass, "climate", "set_fan_mode")
+    set_humidity_state(hass, 75)
+    await set_climate(hass, "dry")
+
+    await setup_blueprint(hass, {**DEFAULT_INPUT, "fan_mode": "low"})
+    await set_humidity(hass, 58)
+
+    assert [c.data["hvac_mode"] for c in hvac_calls] == ["off"]
+    assert len(fan_calls) == 0
 
 
 @pytest.mark.asyncio

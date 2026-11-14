@@ -101,25 +101,20 @@ blueprint:
       selector:
         time:
 
-    dehumidify_actions:
-      name: Dehumidify actions
+    fan_mode:
+      name: Fan mode while dehumidifying
       description: >
-        Actions that start dehumidifying. By default the AC is set to dry mode.
-        Replace them to run a script instead, e.g. one that also sets the fan
-        speed or the setpoint.
-      default:
-        - service: climate.set_hvac_mode
-          target:
-            entity_id: "{{ climate }}"
-          data:
-            hvac_mode: dry
+        Fan speed used in dry mode, e.g. a low or silent speed at night. The
+        available values depend on the integration, see the fan_modes attribute
+        of the AC. Leave empty to keep the current fan mode.
+      default: ""
       selector:
-        action:
+        text:
 
 
 trigger_variables:
 
-  # Available to the triggers, the conditions and the default dehumidify actions
+  # Available to the triggers and the conditions
   climate: !input climate_entity
   temperature_sensor: !input temperature_sensor
   min_temperature: !input min_temperature
@@ -162,6 +157,7 @@ trigger:
 variables:
 
   humidity_sensor: !input humidity_sensor
+  fan_mode_val: !input fan_mode
 
 
 action:
@@ -215,7 +211,30 @@ action:
                          else state_attr(climate, 'current_temperature') %}
               {{ not t | is_number or t | float >= min_temperature | float }}
 
-          - sequence: !input dehumidify_actions
+          - service: climate.set_hvac_mode
+            target:
+              entity_id: !input climate_entity
+            data:
+              hvac_mode: dry
+
+          # Give the unit a moment to settle into dry mode before sending the
+          # fan speed. On at least one real installation (Midea-based Climate
+          # 3000i), a command that arrives while the mode switch is still being
+          # processed gets silently dropped. Not every unit exposes the
+          # configured fan mode either; a rejected speed is not worth an error,
+          # the unit still dehumidifies at its current speed.
+          - if:
+              - condition: template
+                value_template: "{{ fan_mode_val | trim != '' }}"
+            then:
+              - delay:
+                  seconds: 3
+              - service: climate.set_fan_mode
+                continue_on_error: true
+                target:
+                  entity_id: !input climate_entity
+                data:
+                  fan_mode: "{{ fan_mode_val }}"
 
       # The air is dry enough, the room got too cold, or the window ended. Only
       # dry mode is switched off: any other mode means somebody else is using
