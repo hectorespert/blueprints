@@ -24,6 +24,19 @@ blueprint:
         entity:
           domain: input_button
 
+    automations_to_pause:
+      name: Automations to disable during the cycle
+      description: >
+        Automations that would fight the cycle, such as Follow Me or the
+        evaporator dry cycle for this unit. They are disabled before the unit
+        is touched and re-enabled once it reports being off at the end. Only
+        the ones that were enabled when the cycle started are re-enabled.
+      default: []
+      selector:
+        entity:
+          domain: automation
+          multiple: true
+
     freeze_temperature:
       name: Freeze setpoint (C)
       description: >
@@ -56,6 +69,12 @@ trigger:
 variables:
 
   climate: !input climate_entity
+  paused_automations: !input automations_to_pause
+  # Restoring every configured automation would revive one the user had
+  # already disabled before pressing the button.
+  automations_originally_on: >
+    {{ expand(paused_automations) | selectattr('state', 'eq', 'on')
+       | map(attribute='entity_id') | list }}
   freeze_temp_input: !input freeze_temperature
   # A setpoint below min_temp is rejected outright (seen on a real multi-split
   # unit with min_temp 17), which would leave the unit cooling at whatever
@@ -67,6 +86,18 @@ variables:
 
 
 action:
+
+  # Silence rivals before the unit is touched at all.
+  - if:
+      - condition: template
+        value_template: "{{ automations_originally_on | count > 0 }}"
+    then:
+      - service: automation.turn_off
+        target:
+          entity_id: "{{ automations_originally_on }}"
+        data:
+          # Cut short any correction already in flight.
+          stop_actions: true
 
   # Stage 1: freeze.
   - service: climate.set_hvac_mode
@@ -92,6 +123,22 @@ action:
   - service: climate.turn_off
     target:
       entity_id: !input climate_entity
+
+  # Re-enable only once the unit reports 'off'. The integration takes a few
+  # seconds to report it, and the evaporator dry cycle triggers on any change
+  # to 'off': re-enabled any sooner, it would catch our own switch-off.
+  - wait_template: "{{ states(climate) == 'off' }}"
+    timeout:
+      minutes: 2
+    continue_on_timeout: true
+
+  - if:
+      - condition: template
+        value_template: "{{ automations_originally_on | count > 0 }}"
+    then:
+      - service: automation.turn_on
+        target:
+          entity_id: "{{ automations_originally_on }}"
 
 
 mode: single
