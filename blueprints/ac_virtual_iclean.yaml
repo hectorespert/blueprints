@@ -4,8 +4,9 @@ blueprint:
     Self-cleaning cycle for indoor units whose manufacturer function is
     disabled, as happens with Bosch "I clean" on multi-split installations.
 
-    Freezes the evaporator at the lowest setpoint and then switches the unit
-    off.
+    Three stages: freeze the evaporator at the lowest setpoint so dust and
+    grease are trapped in condensate, stop to let it thaw and wash down the
+    drain, then dry the coil with the fan. The unit is left off at the end.
   domain: automation
 
   input:
@@ -59,6 +60,26 @@ blueprint:
           max: 30
           step: 1
 
+    thaw_minutes:
+      name: Thaw time (minutes)
+      description: Unit stays off so the condensate melts and drains away.
+      default: 8
+      selector:
+        number:
+          min: 1
+          max: 30
+          step: 1
+
+    dry_minutes:
+      name: Drying time (minutes)
+      description: Unit runs its fan alone to dry the coil.
+      default: 15
+      selector:
+        number:
+          min: 1
+          max: 60
+          step: 1
+
 
 trigger:
 
@@ -83,6 +104,8 @@ variables:
     {{ [freeze_temp_input | float,
         state_attr(climate, 'min_temp') | float(0)] | max }}
   freeze_minutes_val: !input freeze_minutes
+  thaw_minutes_val: !input thaw_minutes
+  dry_minutes_val: !input dry_minutes
 
 
 action:
@@ -120,6 +143,25 @@ action:
   - delay:
       minutes: "{{ freeze_minutes_val | int }}"
 
+  # Stage 2: thaw. Unit off while the ice melts and drains.
+  - service: climate.turn_off
+    target:
+      entity_id: !input climate_entity
+
+  - delay:
+      minutes: "{{ thaw_minutes_val | int }}"
+
+  # Stage 3: dry. Fan alone to leave the coil dry.
+  - service: climate.set_hvac_mode
+    target:
+      entity_id: !input climate_entity
+    data:
+      hvac_mode: fan_only
+
+  - delay:
+      minutes: "{{ dry_minutes_val | int }}"
+
+  # Leave the unit off, like the manufacturer cycle does.
   - service: climate.turn_off
     target:
       entity_id: !input climate_entity

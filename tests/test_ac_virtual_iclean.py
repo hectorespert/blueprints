@@ -4,7 +4,8 @@ Tests for ac_virtual_iclean.yaml
 Self-cleaning cycle for indoor units whose manufacturer function is disabled,
 as happens with Bosch "I clean" on multi-split installations:
 
-    disable rival automations → freeze (cool at the lowest setpoint) → off
+    disable rival automations → freeze (cool at the lowest setpoint)
+    → thaw (off) → dry (fan_only) → off
     → re-enable them once the unit reports off
 
 async_mock_service captures service calls without updating entity state, so
@@ -34,6 +35,13 @@ DEFAULT_INPUT = {
     ],
     "freeze_temperature": 16,
     "freeze_minutes": 12,
+    "thaw_minutes": 8,
+    "dry_minutes": 15,
+}
+
+MINIMAL_INPUT = {
+    "climate_entity": "climate.test_ac",
+    "manual_trigger": "input_button.test_clean",
 }
 
 
@@ -110,8 +118,24 @@ async def advance(hass: HomeAssistant, freezer, **kwargs) -> None:
     await settle(hass)
 
 
+async def run_until_final_switch_off(hass: HomeAssistant, freezer) -> None:
+    """Drive a default cycle up to its last climate.turn_off.
+
+    The unit reports each commanded mode back, except the final 'off': tests
+    report that themselves, since it is what releases the paused automations.
+    """
+    await press_button(hass)
+    await report_mode(hass, "cool")
+    await advance(hass, freezer, seconds=3)
+    await advance(hass, freezer, minutes=12, seconds=1)
+    await report_mode(hass, "off")
+    await advance(hass, freezer, minutes=8, seconds=1)
+    await report_mode(hass, "fan_only")
+    await advance(hass, freezer, minutes=15, seconds=1)
+
+
 @pytest.mark.asyncio
-async def test_freezes_and_then_switches_the_unit_off(
+async def test_runs_the_three_stages_and_leaves_the_unit_off(
     hass: HomeAssistant, freezer
 ) -> None:
     calls = mock_climate_services(hass)
@@ -119,10 +143,12 @@ async def test_freezes_and_then_switches_the_unit_off(
     await setup_blueprint(hass)
     await press_button(hass)
 
+    # Stage 1: freeze
     assert len(calls["hvac"]) == 1
     assert calls["hvac"][0].data["hvac_mode"] == "cool"
     assert calls["hvac"][0].data["entity_id"] == ["climate.test_ac"]
 
+    await report_mode(hass, "cool")
     await advance(hass, freezer, seconds=3)
     assert len(calls["temp"]) == 1
     assert calls["temp"][0].data["temperature"] == 16.0
@@ -130,8 +156,26 @@ async def test_freezes_and_then_switches_the_unit_off(
     await advance(hass, freezer, minutes=11)
     assert len(calls["off"]) == 0
 
+    # Stage 2: thaw
     await advance(hass, freezer, minutes=1, seconds=1)
     assert len(calls["off"]) == 1
+
+    await report_mode(hass, "off")
+    await advance(hass, freezer, minutes=7)
+    assert len(calls["hvac"]) == 1
+
+    # Stage 3: dry
+    await advance(hass, freezer, minutes=1, seconds=1)
+    assert len(calls["hvac"]) == 2
+    assert calls["hvac"][1].data["hvac_mode"] == "fan_only"
+
+    await report_mode(hass, "fan_only")
+    await advance(hass, freezer, minutes=14)
+    assert len(calls["off"]) == 1
+
+    # The unit is left off, like the manufacturer cycle does
+    await advance(hass, freezer, minutes=1, seconds=1)
+    assert len(calls["off"]) == 2
 
 
 @pytest.mark.asyncio
@@ -151,11 +195,18 @@ async def test_waits_before_sending_the_freeze_setpoint(
 
 
 @pytest.mark.asyncio
-async def test_uses_configured_freeze_settings(hass: HomeAssistant, freezer) -> None:
+async def test_uses_configured_stage_settings(hass: HomeAssistant, freezer) -> None:
     calls = mock_climate_services(hass)
 
     await setup_blueprint(
-        hass, {**DEFAULT_INPUT, "freeze_temperature": 17.5, "freeze_minutes": 5}
+        hass,
+        {
+            **DEFAULT_INPUT,
+            "freeze_temperature": 17.5,
+            "freeze_minutes": 5,
+            "thaw_minutes": 2,
+            "dry_minutes": 3,
+        },
     )
     await press_button(hass)
 
@@ -164,9 +215,18 @@ async def test_uses_configured_freeze_settings(hass: HomeAssistant, freezer) -> 
 
     await advance(hass, freezer, minutes=4)
     assert len(calls["off"]) == 0
-
     await advance(hass, freezer, minutes=1, seconds=1)
     assert len(calls["off"]) == 1
+
+    await advance(hass, freezer, minutes=1)
+    assert len(calls["hvac"]) == 1
+    await advance(hass, freezer, minutes=1, seconds=1)
+    assert len(calls["hvac"]) == 2
+
+    await advance(hass, freezer, minutes=2)
+    assert len(calls["off"]) == 1
+    await advance(hass, freezer, minutes=1, seconds=1)
+    assert len(calls["off"]) == 2
 
 
 @pytest.mark.asyncio
@@ -225,13 +285,7 @@ async def test_second_press_while_running_is_ignored(
 async def test_minimal_configuration(hass: HomeAssistant, freezer) -> None:
     calls = mock_climate_services(hass)
 
-    await setup_blueprint(
-        hass,
-        {
-            "climate_entity": "climate.test_ac",
-            "manual_trigger": "input_button.test_clean",
-        },
-    )
+    autos = await setup_blueprint(hass, MINIMAL_INPUT)
     await press_button(hass)
 
     await advance(hass, freezer, seconds=3)
@@ -239,6 +293,13 @@ async def test_minimal_configuration(hass: HomeAssistant, freezer) -> None:
 
     await advance(hass, freezer, minutes=12, seconds=1)
     assert len(calls["off"]) == 1
+    await advance(hass, freezer, minutes=8, seconds=1)
+    assert calls["hvac"][1].data["hvac_mode"] == "fan_only"
+    await advance(hass, freezer, minutes=15, seconds=1)
+    assert len(calls["off"]) == 2
+
+    assert len(autos["off"]) == 0
+    assert len(autos["on"]) == 0
 
 
 @pytest.mark.asyncio
@@ -266,20 +327,35 @@ async def test_disables_automations_before_touching_the_unit(
 
 
 @pytest.mark.asyncio
-async def test_re_enables_automations_once_the_unit_reports_off(
+async def test_keeps_automations_disabled_through_the_thaw(
     hass: HomeAssistant, freezer
 ) -> None:
-    calls = mock_climate_services(hass)
+    """The thaw switch-off is what would trigger the evaporator dry cycle."""
+    mock_climate_services(hass)
 
     autos = await setup_blueprint(hass)
     await press_button(hass)
     await report_mode(hass, "cool")
     await advance(hass, freezer, seconds=3)
     await advance(hass, freezer, minutes=12, seconds=1)
+    await report_mode(hass, "off")
+    await advance(hass, freezer, minutes=4)
 
-    # Switch-off sent, but the unit still reports cool: re-enabling now would
-    # let the dry cycle catch our own switch-off.
-    assert len(calls["off"]) == 1
+    assert len(autos["on"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_re_enables_automations_once_the_unit_reports_off(
+    hass: HomeAssistant, freezer
+) -> None:
+    calls = mock_climate_services(hass)
+
+    autos = await setup_blueprint(hass)
+    await run_until_final_switch_off(hass, freezer)
+
+    # Switch-off sent, but the unit still reports fan_only: re-enabling now
+    # would let the dry cycle catch our own switch-off.
+    assert len(calls["off"]) == 2
     assert len(autos["on"]) == 0
 
     await report_mode(hass, "off")
@@ -298,10 +374,7 @@ async def test_re_enables_automations_when_the_unit_never_reports_off(
     mock_climate_services(hass)
 
     autos = await setup_blueprint(hass)
-    await press_button(hass)
-    await report_mode(hass, "cool")
-    await advance(hass, freezer, seconds=3)
-    await advance(hass, freezer, minutes=12, seconds=1)
+    await run_until_final_switch_off(hass, freezer)
     await advance(hass, freezer, minutes=1)
     assert len(autos["on"]) == 0
 
@@ -317,35 +390,8 @@ async def test_does_not_enable_an_automation_disabled_before_the_cycle(
     hass.states.async_set("automation.follow_me_test_ac", "off")
 
     autos = await setup_blueprint(hass)
-    await press_button(hass)
-
-    assert autos["off"][0].data["entity_id"] == ["automation.dry_cycle_test_ac"]
-
-    await report_mode(hass, "cool")
-    await advance(hass, freezer, seconds=3)
-    await advance(hass, freezer, minutes=12, seconds=1)
+    await run_until_final_switch_off(hass, freezer)
     await report_mode(hass, "off")
 
+    assert autos["off"][0].data["entity_id"] == ["automation.dry_cycle_test_ac"]
     assert autos["on"][0].data["entity_id"] == ["automation.dry_cycle_test_ac"]
-
-
-@pytest.mark.asyncio
-async def test_leaves_automations_alone_when_none_are_configured(
-    hass: HomeAssistant, freezer
-) -> None:
-    calls = mock_climate_services(hass)
-
-    autos = await setup_blueprint(
-        hass,
-        {
-            "climate_entity": "climate.test_ac",
-            "manual_trigger": "input_button.test_clean",
-        },
-    )
-    await press_button(hass)
-    await advance(hass, freezer, seconds=3)
-    await advance(hass, freezer, minutes=12, seconds=1)
-
-    assert len(calls["off"]) == 1
-    assert len(autos["off"]) == 0
-    assert len(autos["on"]) == 0
