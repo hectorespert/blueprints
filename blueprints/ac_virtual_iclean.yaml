@@ -27,8 +27,9 @@ blueprint:
     freeze_temperature:
       name: Freeze setpoint (C)
       description: >
-        Setpoint used during the freeze stage. Use the lowest value the unit
-        accepts.
+        Setpoint used during the freeze stage. Values below the unit's own
+        minimum (its min_temp attribute) are raised to that minimum, because
+        the unit rejects them.
       default: 16
       selector:
         number:
@@ -54,7 +55,14 @@ trigger:
 
 variables:
 
-  freeze_temp_val: !input freeze_temperature
+  climate: !input climate_entity
+  freeze_temp_input: !input freeze_temperature
+  # A setpoint below min_temp is rejected outright (seen on a real multi-split
+  # unit with min_temp 17), which would leave the unit cooling at whatever
+  # setpoint it had before.
+  freeze_temp_val: >
+    {{ [freeze_temp_input | float,
+        state_attr(climate, 'min_temp') | float(0)] | max }}
   freeze_minutes_val: !input freeze_minutes
 
 

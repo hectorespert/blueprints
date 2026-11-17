@@ -143,6 +143,39 @@ async def test_uses_configured_freeze_settings(hass: HomeAssistant, freezer) -> 
 
 
 @pytest.mark.asyncio
+async def test_raises_the_freeze_setpoint_to_the_unit_minimum(
+    hass: HomeAssistant, freezer
+) -> None:
+    """A unit rejects a setpoint below its min_temp, so it is never sent."""
+    hass.states.async_set(
+        "climate.test_ac", "off", {"temperature": 20.0, "min_temp": 17}
+    )
+    calls = mock_climate_services(hass)
+
+    await setup_blueprint(hass)
+    await press_button(hass)
+    await advance(hass, freezer, seconds=3)
+
+    assert calls["temp"][0].data["temperature"] == 17.0
+
+
+@pytest.mark.asyncio
+async def test_keeps_a_freeze_setpoint_above_the_unit_minimum(
+    hass: HomeAssistant, freezer
+) -> None:
+    hass.states.async_set(
+        "climate.test_ac", "off", {"temperature": 20.0, "min_temp": 16}
+    )
+    calls = mock_climate_services(hass)
+
+    await setup_blueprint(hass, {**DEFAULT_INPUT, "freeze_temperature": 18})
+    await press_button(hass)
+    await advance(hass, freezer, seconds=3)
+
+    assert calls["temp"][0].data["temperature"] == 18.0
+
+
+@pytest.mark.asyncio
 async def test_second_press_while_running_is_ignored(
     hass: HomeAssistant, freezer
 ) -> None:
